@@ -1,4 +1,5 @@
 #import "Settings.h"
+#import "BYOKControls.h"
 
 @implementation DPPageView {
     DPPatch *_patch;
@@ -22,6 +23,10 @@
     heading.spacing = 10;
     heading.alignment = NSLayoutAttributeTop;
     NSMutableArray<NSView *> *views = [NSMutableArray arrayWithObjects:preview, DPGroup(@[DPRow(heading, [self switchFor:patch])]), nil];
+
+    if ([patch->key isEqualToString:@"byok"]) {
+        [views addObjectsFromArray:@[DPHeader(@"Configuration"), DPCreateBYOKSettingsGroup()]];
+    }
 
     NSMutableArray<NSView *> *options = [NSMutableArray new];
     DPForEachOption(patch, ^(DPPatch *option) {

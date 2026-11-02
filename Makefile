@@ -3,7 +3,12 @@ DYLIB_SOURCES := $(shell find src/dylib -name '*.[hm]')
 PASSKEYS := src/dylib/Patches/Passkeys/extension
 EXTENSION := $(foreach file,manifest.json page.js bridge.js worker.js,-Wl,-sectcreate,__TEXT,__pk_$(basename $(file)),$(PASSKEYS)/$(file))
 
-all: build/diapatch build/DiaPatches.dylib build/patches.json
+all: build/diapatch build/DiaPatches.dylib build/patches.json build/byok
+
+build/byok: $(wildcard src/byok/*) | build
+	mkdir -p $@
+	cp -f src/byok/* $@/
+	chmod +x $@/*.js
 
 build/diapatch: $(wildcard src/diapatch/*.[hm]) | build
 	clang $(CFLAGS) -framework AppKit -framework CoreGraphics -framework Security -o $@ $(filter %.m,$^)

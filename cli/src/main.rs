@@ -1,3 +1,4 @@
+mod byok;
 mod child;
 mod dia;
 mod env;
@@ -60,6 +61,11 @@ enum Command {
         #[arg(long)]
         purge: bool,
     },
+    /// Configure Bring Your Own Key (BYOK) and model picker
+    Byok {
+        #[command(subcommand)]
+        subcommand: Option<byok::ByokCommand>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -106,5 +112,6 @@ fn run(command: Option<Command>, ui: &Ui) -> Result<()> {
         Command::Update => update::run(&env, ui),
         Command::UpdateDia => update_dia::run(&env, ui),
         Command::Restore { purge } => restore::run(&env, ui, purge),
+        Command::Byok { subcommand } => byok::run(&env, ui, subcommand),
     }
 }

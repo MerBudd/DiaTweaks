@@ -304,6 +304,34 @@ static BOOL stagedReady(void) {
 
 static BOOL unstage(void) { return discard(gStaged) && removeTree(gReady); }
 
+static BOOL installBYOKFiles(NSString *app) {
+    NSString *byokDir = inHome(@"byok");
+    if (!exists(byokDir)) return YES;
+    NSString *dist = [app stringByAppendingPathComponent:@"Contents/Resources/agent-server-resources/dist"];
+    if (!exists(dist)) return YES;
+    NSString *handler = [dist stringByAppendingPathComponent:@"handler"];
+    NSString *realHandler = [dist stringByAppendingPathComponent:@"handler.real"];
+    NSFileManager *fm = NSFileManager.defaultManager;
+    if (!exists(realHandler) && exists(handler)) {
+        [fm moveItemAtPath:handler toPath:realHandler error:NULL];
+        NSString *wrapper = [byokDir stringByAppendingPathComponent:@"handler-wrapper.js"];
+        if (exists(wrapper)) {
+            [fm copyItemAtPath:wrapper toPath:handler error:NULL];
+            chmod(handler.fileSystemRepresentation, 0755);
+        }
+    }
+    for (NSString *file in @[@"router.js", @"translator.js", @"providers.js", @"verify.js"]) {
+        NSString *src = [byokDir stringByAppendingPathComponent:file];
+        NSString *dst = [dist stringByAppendingPathComponent:file];
+        if (exists(src)) {
+            [fm removeItemAtPath:dst error:NULL];
+            [fm copyItemAtPath:src toPath:dst error:NULL];
+            chmod(dst.fileSystemRepresentation, 0644);
+        }
+    }
+    return YES;
+}
+
 static BOOL build(NSString *source) {
     NSString *executable = infoOf(source)[@"CFBundleExecutable"], *dylib = inHome(@DYLIB);
     if (!executable) return fail(@"no official Dia at %@; reinstall Dia from https://www.diabrowser.com", source);
@@ -313,6 +341,7 @@ static BOOL build(NSString *source) {
     BOOL ok = removeTree(work) && makeDir(gStaged.stringByDeletingLastPathComponent) && clone(source, work)
         && addLoadCommand([contents stringByAppendingPathComponent:[@"MacOS" stringByAppendingPathComponent:executable]], dylib)
         && configureInfo(work) && removeTree([contents stringByAppendingPathComponent:@"embedded.provisionprofile"])
+        && installBYOKFiles(work)
         && sign(work) && moveBundle(work, gStaged)
         && ([stagedID() writeToFile:gReady atomically:YES encoding:NSUTF8StringEncoding error:NULL] || fail(@"cannot write %@", gReady));
     if (!ok) removeTree(work);

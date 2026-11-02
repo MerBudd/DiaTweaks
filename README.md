@@ -12,6 +12,14 @@ Turn tweaks on and off in **Dia → Settings → Patches**, or with the `diatwea
 
 [See all tweaks →](https://github.com/JaceThings/DiaTweaks/wiki)
 
+### Bring Your Own Key (BYOK)
+
+Route Dia Chat and agent features through your own AI API key and choice of model.
+- **Supported Providers**: Google Gemini, Anthropic, OpenAI, OpenRouter.
+- **Live Key Verification & Model Fetching**: When you paste your key and click **Verify & Fetch Models** (or run `diatweaks byok set`), it verifies the key against the provider's API and populates the model dropdown with available models.
+- **Model Selection**: Pick any model from the dropdown or specify custom model IDs.
+- **Briefs & Summaries Toggle**: Under **Dia → Settings → Patches** or via the Menu Bar item **"Use BYOK for Briefs & Summaries"**, choose whether Morning Briefs and page summaries use your BYOK key or Dia's default.
+
 ## Install
 
 1. Put Dia in your Applications folder.
@@ -30,6 +38,10 @@ Run `diatweaks` on its own for a menu, or:
 
 | Command | Does |
 |---|---|
+| `diatweaks byok` | Configure BYOK AI provider, API key, model and briefs toggle |
+| `diatweaks byok set` | Set provider (`google`, `anthropic`, `openai`, `openrouter`), key, and default model |
+| `diatweaks byok verify` | Test your API key and inspect available models |
+| `diatweaks byok models` | Fetch and list all available models from the selected provider |
 | `diatweaks list` | Shows every tweak and whether it's on |
 | `diatweaks enable hideToolbar` | Turns a tweak on; Dia changes straight away |
 | `diatweaks disable hideToolbar` | Turns a tweak off |

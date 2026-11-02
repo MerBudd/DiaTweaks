@@ -35,12 +35,14 @@ fi
 rm -rf "$incoming"
 mkdir -p "$incoming" "$support/bin"
 cp build/diapatch build/DiaPatches.dylib build/patches.json ${cli:+"$cli"} "$incoming/"
+[ -d build/byok ] && cp -R build/byok "$incoming/"
 # Each rename is atomic, and Ctrl-C waits until all are done, so the installed files always come from one build.
 trap 'interrupted=1' INT TERM
 (
     trap '' INT TERM
     mv -f "$incoming/diapatch" ${cli:+"$incoming/diatweaks"} "$support/bin/"
     mv -f "$incoming/DiaPatches.dylib" "$incoming/patches.json" "$support/"
+    [ -d "$incoming/byok" ] && rm -rf "$support/byok" && mv -f "$incoming/byok" "$support/"
 )
 [ -z "${interrupted-}" ] || exit 130
 trap 'exit 130' INT TERM
