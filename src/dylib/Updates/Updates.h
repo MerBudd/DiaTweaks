@@ -2,6 +2,7 @@
 
 void DPInstallUpdates(void);
 void DPRunCLI(NSArray<NSString *> *args, void (^completion)(NSString *output));
+void DPRunCLIReporting(NSArray<NSString *> *args, void (^completion)(NSString *output, NSString *reason));  // reason: why it failed, if it said
 void DPHandOffAndQuit(NSArray<NSString *> *args);  // Quits Dia while the CLI runs `args`, then relaunches it.
 
 extern NSString *const DPDia, *const DPTweaks;
@@ -23,6 +24,7 @@ extern NSNotificationName const DPUpdatesDidChangeNotification;
 - (BOOL)staged:(NSString *)part;
 - (BOOL)downloading:(NSString *)part;
 - (BOOL)failed:(NSString *)part;
+- (NSString *)failure:(NSString *)part;  // why the last download failed, if diapatch said
 - (double)progress:(NSString *)part;  // 0–1 while downloading, then -1 while it's verified and patched.
 - (void)download:(NSString *)part then:(void (^)(void))done;
 - (void)installAndRelaunch:(NSArray<NSString *> *)parts;

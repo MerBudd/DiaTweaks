@@ -7,6 +7,8 @@
 @property (nonatomic, weak) NSView *title;
 @property (nonatomic) NSTextField *label, *field;
 @property (nonatomic) BOOL hovered, beginning, ending;
+@property (nonatomic, copy) NSString *notice;  // Shown in place of the address for a moment, as "Copied current URL".
+@property (nonatomic) NSUInteger notices;
 @end
 
 @implementation DPAddressView
@@ -79,6 +81,10 @@
     } else if (self.pageTitle.length && ![self.pageTitle isEqual:url.absoluteString]) {
         rest = [@" / " stringByAppendingString:self.pageTitle];
     }
+    if (self.notice) {
+        host = self.notice;
+        rest = @"";
+    }
     NSFont *font = [NSFont systemFontOfSize:13];
     NSMutableAttributedString *text = [[NSMutableAttributedString alloc] initWithString:host attributes:@{NSFontAttributeName : font, NSForegroundColorAttributeName : NSColor.labelColor}];
     [text appendAttributedString:[[NSAttributedString alloc] initWithString:rest attributes:@{NSFontAttributeName : font, NSForegroundColorAttributeName : NSColor.secondaryLabelColor}]];
@@ -98,6 +104,8 @@
         [self.window makeFirstResponder:self.field];
         return;
     }
+    self.notice = nil;  // A notice in the label isn't an address to edit.
+    [self refresh];
     NSString *shown = [self.url.absoluteString isEqual:@"about:blank"] ? @"" : self.url.absoluteString;
     NSTextField *field = [NSTextField textFieldWithString:shown ?: self.label.stringValue];
     field.bezeled = NO;
@@ -170,4 +178,18 @@ static void DPEditAddressSoon(NSWindow *window, int tries) {
 void DPEditLittleDiaAddress(NSWindow *window) {
     __weak NSWindow *weak = window;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 400 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{ if (weak) DPEditAddressSoon(weak, 20); });
+}
+
+void DPShowLittleDiaNotice(NSWindow *window, NSString *message) {
+    DPAddressView *address = (DPAddressView *)DPFindView(window.contentView.superview, ^BOOL(NSView *view) { return [view isKindOfClass:DPAddressView.class]; });
+    if (!address || address.field) return;
+    address.notice = message;
+    NSUInteger notice = ++address.notices;
+    [address refresh];
+    __weak DPAddressView *weak = address;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1500 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+        if (weak.notices != notice) return;
+        weak.notice = nil;
+        [weak refresh];
+    });
 }

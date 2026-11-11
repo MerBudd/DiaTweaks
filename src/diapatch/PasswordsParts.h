@@ -1,36 +1,11 @@
 #import <Foundation/Foundation.h>
 
-// `key` gives the relay extension the manager's extension ID, as each helper only answers its own extension.
-typedef struct {
-    const char *origins[3];
-    const char *host;
-    const char *key;
-    const char *socket;
-} DPPasswordsService;
-
-// Apple's helper only checks its parent as it starts, so it isn't relayed.
-enum { DPPasswordsServiceCount = 1 };
-extern const DPPasswordsService DPPasswordsServices[DPPasswordsServiceCount];
-const DPPasswordsService *DPPasswordsServiceFor(const char *origin);
-NSString *DPPasswordsSocket(NSString *home, const DPPasswordsService *service);
-
 extern const char *const DPHandoffVariable;
 NSString *DPAppleHelper(void);
-pid_t DPStartHelperThroughOriginal(NSString *home, int argc, const char *argv[]);
+NSString *DPOnePasswordHelper(void);
+BOOL DPIsOnePasswordOrigin(const char *origin);
+pid_t DPStartHelperThroughOriginal(NSString *home, NSString *helper, BOOL checksBrowser, int argc, const char *argv[]);
 
 BOOL DPRunsPatchedDia(pid_t pid, NSString *app);
 BOOL DPRunsThisDiapatch(audit_token_t token);
 pid_t DPParentOf(pid_t pid);
-BOOL DPPatchedDiaRunning(NSString *app);
-BOOL DPTrustedRelayPeer(int fd, NSString *app);
-
-void DPDevToolsAttach(int toDia, int fromDia);
-void DPDevToolsCall(NSString *method, NSDictionary *params, NSString *session);
-NSDictionary *DPDevToolsAsk(NSString *method, NSDictionary *params, NSString *session);
-BOOL DPDevToolsRead(void);
-NSArray<NSDictionary *> *DPDevToolsTakeEvents(void);
-int DPDevToolsInput(void);
-
-BOOL DPCopyStart(NSString *home);
-void DPCopyEvaluate(const DPPasswordsService *service, NSString *expression);
-void DPCopyQuit(void);

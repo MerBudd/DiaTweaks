@@ -1,7 +1,7 @@
 #import "StdPatch/StdPatch.h"
 
 extern DPPatch DPTidyTabs;
-static const CGFloat DPTidyRowHeight = 24, DPTidyBrushSize = 22, DPTidyTabRowHeight = 40;
+static const CGFloat DPTidyRowHeight = 24, DPTidyBrushSize = 22;
 static const NSInteger DPTidyMinimumTabs = 6;
 
 @interface DPTidyHover : NSObject

@@ -59,7 +59,7 @@ static NSButton *DPButton(NSString *title, id target, SEL action, NSString *part
     DPUpdates *updates = DPUpdates.shared;
     NSMutableString *shape = [NSMutableString stringWithFormat:@"%d %d", updates.checking, updates.found != nil];
     for (NSString *part in self.shown)
-        [shape appendFormat:@" %@:%@:%@:%d", part, [self stateOf:part], updates.found[part][@"latest"], [updates failed:part]];
+        [shape appendFormat:@" %@:%@:%@:%d:%@", part, [self stateOf:part], updates.found[part][@"latest"], [updates failed:part], [updates failure:part]];
     for (NSString *part in @[DPDia, DPTweaks]) [shape appendFormat:@"%ld", DPAutoLevelOf(part)];
     if (![shape isEqual:_shape]) {
         _shape = shape;
@@ -145,8 +145,9 @@ static NSButton *DPButton(NSString *title, id target, SEL action, NSString *part
     BOOL installsOnQuit = DPAutoLevelOf(part) == DPAutoInstall;
     NSString *size = [NSByteCountFormatter stringFromByteCount:[found[@"size"] longLongValue] countStyle:NSByteCountFormatterCountStyleFile];
     NSTextField *detail = DPLine([state isEqual:@"staged"] ? (installsOnQuit ? @"Installs when you quit" : @"Ready to install")
-                                 : [updates failed:part] ? @"Download failed" : size,
+                                 : [updates failed:part] ? ([updates failure:part] ?: @"Download failed") : size,
                                  11, [updates failed:part] ? NSColor.systemRedColor : NSColor.secondaryLabelColor);
+    if ([updates failed:part]) detail.toolTip = detail.stringValue;  // the line truncates
     NSStackView *leading = [NSStackView stackViewWithViews:@[
         DPPartIcon(part),
         DPColumn(@[DPLine([NSString stringWithFormat:@"%@ %@", DPPartName(part), found[@"latest"]], 13, NSColor.labelColor), detail], 2),

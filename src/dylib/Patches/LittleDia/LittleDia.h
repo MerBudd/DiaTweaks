@@ -58,12 +58,21 @@ BOOL DPHideAgain(void);                     // Hides Dia again once its last sma
 // Bar.m: close, back, forward and reload before the address, Open in Dia and a profile menu after it, and no Downloads
 // button.
 void DPInstallLittleDiaBar(void);
+// Also Peek's toolbar, so the two bars look and behave alike.
+NSButton *DPMakeBarButton(NSString *symbol, NSString *label, NSString *key, void (^action)(void));  // key: with ⌘, or nil.
+NSView *DPMakeDivider(void);
+void DPMatchPage(NSView *row, id page);  // The row takes the page's color, and a light or dark look to suit it.
 void DPRelayoutLittleDiaBars(void);
 
 // Address.m: the address as Dia's main window shows it. Click it, or press ⌘L, to type another.
 NSView *DPMakeAddressView(NSView *title);
 void DPRefreshAddressView(NSView *view);
 void DPEditLittleDiaAddress(NSWindow *window);  // As ⌘L does, once the window has its address.
+void DPShowLittleDiaNotice(NSWindow *window, NSString *message);  // In place of the address, for a moment.
+
+// Shortcuts.m: Dia's menu commands, like Copy URL, Go Back, Zoom In and Print, and their shortcuts, act on the page.
+void DPInstallLittleDiaShortcuts(void);
+NSString *DPLittleDiaShortcutsProblem(void);
 
 // Navigate.m: the page's own navigation.
 NSString *DPLittleDiaURL(NSWindow *window);                   // The page's address, or @"" before it has one.

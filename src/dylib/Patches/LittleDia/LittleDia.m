@@ -10,6 +10,7 @@ static void DPInstallLittleDia(void) {
     DPInstallLittleDiaWindows();
     DPInstallLittleDiaLinkMenu();
     DPInstallLittleDiaNewWindow();
+    DPInstallLittleDiaShortcuts();
 }
 
 static void DPApplyLittleDia(DPPatch *patch) {
@@ -36,7 +37,7 @@ static NSString *DPVerifyLittleDia(DPPatch *patch) {
         if (!patch->on && button) return @"Open in Dia button still showing";
         if (patch->on && little && bar.window.titleVisibility != NSWindowTitleHidden) return @"title bar still showing";
     }
-    return DPLittleDiaNewWindowProblem() ?: (patch->on ? DPLittleDiaLinkMenuProblem() : nil);
+    return DPLittleDiaNewWindowProblem() ?: (patch->on ? DPLittleDiaLinkMenuProblem() ?: DPLittleDiaShortcutsProblem() : nil);
 }
 
 DP_PATCH(DPLittleDia) {

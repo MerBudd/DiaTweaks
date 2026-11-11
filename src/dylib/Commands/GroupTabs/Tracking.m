@@ -60,6 +60,12 @@ static void DPBrowser_takeOwnership(id self, SEL _cmd, id contents) {
 
 NSWindow *DPBrowserWindow(id browser) { return [DPWindowByBrowser objectForKey:browser]; }
 
+id DPBrowserOfWindow(NSWindow *window) {
+    for (id browser in DPBrowsers.allObjects)
+        if (window && [DPWindowByBrowser objectForKey:browser] == window) return browser;
+    return nil;
+}
+
 id DPCommandBrowser(void) {
     NSMutableArray *ready = [NSMutableArray new];
     for (id browser in DPBrowsers.allObjects)

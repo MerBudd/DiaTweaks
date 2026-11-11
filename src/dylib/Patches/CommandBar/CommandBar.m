@@ -1,4 +1,5 @@
 #import "StdPatch/StdPatch.h"
+#import "Patches/CommandBar/Tabs.h"
 
 extern DPPatch DPCommandBar, DPCommandBarBlur, DPCommandBarDarken, DPCommandBarShadow, DPCommandBarInteractive, DPCommandBarKeepText;
 static char DPOverlayKey, DPHomeKey, DPRecentKey, DPBlankKey, DPSplitKey, DPOwnBarKey, DPLeftTextKey, DPClosedAtKey;
@@ -58,23 +59,6 @@ static BOOL DPIsShortcut(NSEvent *event, NSString *menuTitle) {
 }
 
 #pragma mark Tabs
-
-static id DPScriptWindow(NSWindow *window) {
-    for (id scripted in [(id)NSApp.delegate valueForKey:@"appleScriptWindows"])
-        if ([[scripted valueForKey:@"windowId"] isEqual:window.identifier]) return scripted;
-    return nil;
-}
-
-static id DPScriptTab(NSWindow *window, NSString *tabID) {
-    for (id tab in [DPScriptWindow(window) valueForKey:@"appleScriptTabs"])
-        if ([[tab valueForKey:@"tabId"] isEqual:tabID]) return tab;
-    return nil;
-}
-
-static NSString *DPTabID(id tab) { return [tab valueForKey:@"tabId"]; }
-static NSString *DPActiveTabID(NSWindow *window) { return DPTabID([DPScriptWindow(window) valueForKey:@"activeTab"]); }
-static void DPFocusTab(id tab) { [tab performSelector:@selector(focus:) withObject:nil]; }
-static void DPCloseTab(id tab) { [tab performSelector:@selector(close:) withObject:nil]; }
 
 static void DPNoteActiveTab(NSWindow *window) {
     NSString *active = DPActiveTabID(window);

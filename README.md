@@ -95,6 +95,13 @@ The tweaked Dia is signed by you instead of The Browser Company, so macOS checks
 </details>
 
 <details>
+<summary><strong>Why does screen sharing ask for permission again?</strong></summary>
+
+macOS ties Screen Recording to the app's signature, and the tweaked Dia is signed differently from the original. The first time DiaTweaks patches Dia (and when it goes back to the original), it clears the old permission so macOS asks once for the new one. Switch on **Dia** under **System Settings → Privacy & Security → Screen & System Audio Recording**, then quit and reopen Dia. Dia and DiaTweaks updates keep your permission. If sharing still loops, run `tccutil reset ScreenCapture company.thebrowser.dia` and try again.
+
+</details>
+
+<details>
 <summary><strong>Does it run in the background?</strong></summary>
 
 No. It only does anything while Dia is open.

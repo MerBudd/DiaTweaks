@@ -30,7 +30,8 @@ NSDictionary *DPTabPlaces(NSDictionary<NSNumber *, NSString *> *urls) {
     return tabs && sessions.count == urls.count ? @{@"order": [tabs valueForKey:@"tabId"], @"sessions": sessions} : nil;
 }
 
-static void DPMoveTab(id delegate, id browser, NSNumber *sid, NSInteger index, void (^done)(void)) {
+// index counts from the first unpinned tab, and `done` runs on the main queue.
+void DPMoveTab(id delegate, id browser, NSNumber *sid, NSInteger index, void (^done)(void)) {
     void (*create)(id, SEL, id, NSArray *, id, void (^)(id)) = (void *)objc_msgSend;
     void (*move)(id, SEL, id, id, NSInteger, void (^)(id)) = (void *)objc_msgSend;
     void (*ungroup)(id, SEL, id, NSArray *, void (^)(id)) = (void *)objc_msgSend;

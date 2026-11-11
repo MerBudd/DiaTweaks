@@ -75,7 +75,10 @@ static NSView *DPWideRow(NSView *view) {
         }
     });
     _rows = DPRowsOf(patch);
-    for (NSView *view in _rows) add(view.identifier ?: @"Options", DPWideRow(view));
+    for (NSView *view in _rows) {
+        if ([view.identifier isEqual:DPLeadingOption]) [groups[@"Options"] insertObject:DPWideRow(view) atIndex:0];
+        else add(view.identifier ?: @"Options", DPWideRow(view));
+    }
     if ([titles containsObject:unavailable]) {
         [titles removeObject:unavailable];
         [titles addObject:unavailable];

@@ -61,6 +61,23 @@ void DPPeekLoad(id page, NSURL *url) {
     if (url && [navigation respondsToSelector:load]) ((id (*)(id, SEL, NSURL *, NSURL *))objc_msgSend)(navigation, load, url, nil);
 }
 
+// Dia's default search engine for the profile the page belongs to, else Google.
+NSURL *DPPeekSearchURL(id page, NSString *text) {
+    id factory = DPPeekFactoryFor(page, NSApp.keyWindow);
+    id context = [factory respondsToSelector:@selector(preferences)] ? factory : [(NSObject *)factory valueForKey:@"context"];
+    id engine = [[(NSObject *)context valueForKey:@"preferences"] performSelector:@selector(getDefaultSearchEngine)];
+    NSString *query = [text stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLQueryAllowedCharacterSet];
+    query = [query stringByReplacingOccurrencesOfString:@"&" withString:@"%26"];
+    query = [query stringByReplacingOccurrencesOfString:@"+" withString:@"%2B"];
+    NSString *template = [(NSObject *)engine valueForKey:@"url"];
+    if (![template isKindOfClass:NSString.class] || ![template containsString:@"{searchTerms}"] || [template containsString:@"{google:"])
+        template = @"https://www.google.com/search?q={searchTerms}";
+    template = [template stringByReplacingOccurrencesOfString:@"{searchTerms}" withString:query];
+    // Chromium's other placeholders, such as {inputEncoding}, mean nothing outside its omnibox.
+    NSRegularExpression *rest = [NSRegularExpression regularExpressionWithPattern:@"\\{[^}]*\\}" options:0 error:nil];
+    return [NSURL URLWithString:[rest stringByReplacingMatchesInString:template options:0 range:NSMakeRange(0, template.length) withTemplate:@""]];
+}
+
 static BOOL DPPeekGive(id page, id delegate, id source, NSURL *url, DPPeekExit exit) {
     SEL adopt = @selector(webContents:didCreateNewWebContent:targetURL:disposition:);
     if (!page || !source || ![url isKindOfClass:NSURL.class] || ![delegate respondsToSelector:adopt]) return NO;

@@ -23,7 +23,8 @@ static id DPScriptWindow(NSWindow *window) {
     return nil;
 }
 
-static long long DPActiveSession(id browser) {
+// 0 when the tab in front can't be told from the others.
+long long DPActiveSession(id browser) {
     long long sid = DPVisibleSession(browser);
     if (sid > 0) return sid;
     id active = [DPScriptWindow(DPBrowserWindow(browser)) valueForKey:@"activeTab"];

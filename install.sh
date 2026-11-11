@@ -42,6 +42,7 @@ trap 'interrupted=1' INT TERM
     mv -f "$incoming/diapatch" ${cli:+"$incoming/diatweaks"} "$support/bin/"
     mv -f "$incoming/DiaPatches.dylib" "$incoming/patches.json" "$support/"
     rm -rf "$support/app-icons"
+    rm -f "$support/release.plist"  # this is a source build now, not a release
     mv -f "$incoming/app-icons" "$support/"
 )
 [ -z "${interrupted-}" ] || exit 130

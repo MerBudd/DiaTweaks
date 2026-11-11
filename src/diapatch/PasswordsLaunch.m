@@ -1,8 +1,11 @@
 // The helper's launch constraint only checks its parent as it starts, so the original Dia runs just until its first
-// subprocess (this diapatch) becomes the helper. The helper's pairing window then says "(null)" for the browser.
+// subprocess (this diapatch) becomes the helper. Apple's pairing window then says "(null)" for the browser.
 #import <libproc.h>
 #import <poll.h>
 #import <spawn.h>
+#import <sys/clonefile.h>
+#import <sys/stat.h>
+#import <sys/xattr.h>
 #import <sys/socket.h>
 #import <sys/un.h>
 #import <sys/wait.h>
@@ -12,6 +15,7 @@
 extern char **environ;
 int responsibility_spawnattrs_setdisclaim(posix_spawnattr_t *attrs, int disclaim);  // private: macOS asks about the copy, not Dia
 
+NSString *const DPCopyFolder = @"/Applications/.DiaTweaks";
 const char *const DPHandoffVariable = "DIAPATCH_PASSWORDS_HANDOFF";
 static const NSTimeInterval kStartupTimeout = 20;
 
@@ -45,8 +49,8 @@ static int listenAt(NSString *path) {
 }
 
 // Headless and in a home of its own, it opens no windows and leaves the patched Dia's settings alone.
-static pid_t launchOriginal(NSString *home, NSString *folder, NSString *socket) {
-    NSString *dia = [home stringByAppendingPathComponent:@"pristine/Dia.app/Contents/MacOS/Dia"];
+static pid_t launchOriginal(NSString *app, NSString *folder, NSString *socket) {
+    NSString *dia = [app stringByAppendingPathComponent:@"Contents/MacOS/Dia"];
     NSString *profile = [@"--user-data-dir=" stringByAppendingString:[folder stringByAppendingPathComponent:@"ud"]];
     NSString *subprocess = [@"--browser-subprocess-path=" stringByAppendingString:NSBundle.mainBundle.executablePath];
     const char *argv[] = { dia.fileSystemRepresentation, profile.UTF8String, subprocess.UTF8String, "--headless=new", "--no-first-run",
@@ -90,8 +94,8 @@ static int acceptSubprocess(int listener, pid_t *dia, pid_t *peer) {
     return -1;
 }
 
-static BOOL handOver(int client, int argc, const char *argv[]) {
-    NSDictionary *launch = @{ @"arguments" : strings(argv + 1, argc - 1), @"environment" : strings((const char *const *)environ, -1) };
+static BOOL handOver(int client, NSString *helper, int argc, const char *argv[]) {
+    NSDictionary *launch = @{ @"helper" : helper, @"arguments" : strings(argv + 1, argc - 1), @"environment" : strings((const char *const *)environ, -1) };
     NSData *payload = [NSJSONSerialization dataWithJSONObject:launch options:0 error:nil];
     uint32_t length = (uint32_t)payload.length;
     int fds[3] = { STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO };
@@ -111,33 +115,56 @@ static BOOL handOver(int client, int argc, const char *argv[]) {
 }
 
 // The subprocess's end of the socket closes as it execs, or as it gives up.
-static BOOL becameHelper(int client, pid_t peer) {
+static BOOL becameHelper(int client, pid_t peer, NSString *helperPath) {
     char byte, path[PROC_PIDPATHINFO_MAXSIZE], helper[PATH_MAX];
     setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &(struct timeval){ .tv_sec = 5 }, sizeof(struct timeval));
     while (read(client, &byte, 1) > 0) {}
-    if (!realpath(DPAppleHelper().fileSystemRepresentation, helper)) return NO;
+    if (!realpath(helperPath.fileSystemRepresentation, helper)) return NO;
     for (int tries = 0; tries < 50; tries++, usleep(10000))
         if (proc_pidpath(peer, path, sizeof path) > 0 && !strcmp(path, helper)) return YES;
     return NO;
 }
 
-pid_t DPStartHelperThroughOriginal(NSString *home, int argc, const char *argv[]) {
+// 1Password's helper checks its browser itself, a few milliseconds after it starts, from a sandbox that can only read apps
+// under /Applications. So it needs a clone of the original Dia there (instant on APFS), and the browser to outlive it by a moment.
+static const useconds_t kBrowserCheck = 300000;
+
+static NSString *applicationsCopy(NSString *pristine) {
+    NSString *clone = [DPCopyFolder stringByAppendingPathComponent:@"Dia.app"], *fresh = [clone stringByAppendingFormat:@".%d", getpid()];
+    struct stat original, copy;
+    NSString *executable = @"Contents/MacOS/Dia";
+    if (stat([pristine stringByAppendingPathComponent:executable].fileSystemRepresentation, &original) != 0
+        || stat([clone stringByAppendingPathComponent:executable].fileSystemRepresentation, &copy) != 0
+        || original.st_size != copy.st_size || original.st_mtime != copy.st_mtime) {
+        [NSFileManager.defaultManager createDirectoryAtPath:DPCopyFolder withIntermediateDirectories:YES attributes:nil error:nil];
+        [NSFileManager.defaultManager removeItemAtPath:clone error:nil];
+        if (clonefile(pristine.fileSystemRepresentation, fresh.fileSystemRepresentation, 0) != 0 || rename(fresh.fileSystemRepresentation, clone.fileSystemRepresentation) != 0) return nil;
+    }
+    // Files made from inside Dia are quarantined, so macOS would ask before opening the copy. Only strip it when it's there: macOS warns when a process changes an app it didn't make.
+    if (getxattr(clone.fileSystemRepresentation, "com.apple.quarantine", NULL, 0, 0, 0) >= 0) removexattr(clone.fileSystemRepresentation, "com.apple.quarantine", 0);
+    return clone;
+}
+
+pid_t DPStartHelperThroughOriginal(NSString *home, NSString *helperPath, BOOL checksBrowser, int argc, const char *argv[]) {
     NSString *launches = [home stringByAppendingPathComponent:@"passwords-launch"];
     NSString *folder = [launches stringByAppendingPathComponent:@(getpid()).stringValue], *socket = [folder stringByAppendingString:@".sock"];
+    NSString *pristine = [home stringByAppendingPathComponent:@"pristine/Dia.app"];
+    NSString *app = checksBrowser ? applicationsCopy(pristine) : pristine;
     [NSFileManager.defaultManager createDirectoryAtPath:folder withIntermediateDirectories:YES attributes:@{ NSFilePosixPermissions : @0700 } error:nil];
     chmod(launches.fileSystemRepresentation, 0700);
     NSDate *start = NSDate.date;
     int listener = listenAt(socket);
-    pid_t dia = listener >= 0 ? launchOriginal(home, folder, socket) : 0, peer = 0, helper = 0;
+    pid_t dia = listener >= 0 && app ? launchOriginal(app, folder, socket) : 0, peer = 0, helper = 0;
     int client = dia ? acceptSubprocess(listener, &dia, &peer) : -1;
     if (listener >= 0) close(listener);
     unlink(socket.fileSystemRepresentation);
-    if (client >= 0 && handOver(client, argc, argv) && becameHelper(client, peer)) helper = peer;
+    if (client >= 0 && handOver(client, helperPath, argc, argv) && becameHelper(client, peer, helperPath)) helper = peer;
     if (client >= 0) close(client);
+    if (helper && checksBrowser) usleep(kBrowserCheck);
     if (dia) kill(dia, SIGKILL), waitpid(dia, NULL, 0);
-    if (dia) DPForgetApp([home stringByAppendingPathComponent:@"pristine/Dia.app"]);
+    if (dia) DPForgetApp(app);
     [NSFileManager.defaultManager removeItemAtPath:folder error:nil];
-    logLine(home, [NSString stringWithFormat:helper ? @"the original Dia started Apple's helper in %.2f s" : @"the original Dia didn't start Apple's helper (%.2f s)",
-                                             -start.timeIntervalSinceNow]);
+    logLine(home, [NSString stringWithFormat:helper ? @"the original Dia started %@ in %.2f s" : @"the original Dia didn't start %@ (%.2f s)",
+                                             helperPath.lastPathComponent, -start.timeIntervalSinceNow]);
     return helper;
 }

@@ -26,7 +26,7 @@ static const CGFloat DPInset = 6, DPGap = 2, DPButton = 28, DPChevron = 20;
 }
 @end
 
-static NSView *DPMakeDivider(void) { return [DPBarDivider new]; }
+NSView *DPMakeDivider(void) { return [DPBarDivider new]; }
 
 // The page's background, or failing that its theme-color. Chromium has neither for some pages: nil.
 static NSColor *DPPageColor(id page) {
@@ -43,7 +43,7 @@ static NSColor *DPPageColor(id page) {
 
 static char DPColorKey;
 
-static void DPMatchPage(NSView *row, id page) {
+void DPMatchPage(NSView *row, id page) {
     NSColor *color = DPPageColor(page);
     if ([DPGet(row, &DPColorKey) isEqual:color] || (!color && !DPGet(row, &DPColorKey))) return;
     DPSet(row, &DPColorKey, color);
@@ -155,7 +155,7 @@ static void DPMatchPage(NSView *row, id page) {
 
 @end
 
-static NSButton *DPMakeBarButton(NSString *symbol, NSString *label, NSString *key, void (^action)(void)) {
+NSButton *DPMakeBarButton(NSString *symbol, NSString *label, NSString *key, void (^action)(void)) {
     DPBarButton *button = [[DPBarButton alloc] initWithSymbol:symbol size:13 label:label];
     button.handler = action;
     if (key) {

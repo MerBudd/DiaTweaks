@@ -29,22 +29,36 @@ DPAutoLevel DPAutoLevelOf(NSString *part) {
 
 void DPSetAutoLevel(NSString *part, DPAutoLevel level) { [DPUpdateDefaults() setInteger:level forKey:DPAutoKey(part)]; }
 
-void DPRunCLI(NSArray<NSString *> *args, void (^completion)(NSString *output)) {
+// The last line diapatch printed to stderr, without its "diapatch: " prefix: why a run failed.
+static NSString *DPReasonIn(NSData *data) {
+    NSString *text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    NSString *line = [[text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] componentsSeparatedByString:@"\n"].lastObject;
+    if ([line hasPrefix:@"diapatch: "]) line = [line substringFromIndex:10];
+    return line.length ? line : nil;
+}
+
+void DPRunCLIReporting(NSArray<NSString *> *args, void (^completion)(NSString *output, NSString *reason)) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         NSTask *task = [NSTask new];
         task.executableURL = [NSURL fileURLWithPath:DPSupport(@"bin/diapatch")];
         task.arguments = args;
-        NSPipe *pipe = [NSPipe pipe];
+        NSPipe *pipe = [NSPipe pipe], *errors = [NSPipe pipe];
         task.standardOutput = pipe;
-        task.standardError = NSFileHandle.fileHandleWithNullDevice;
-        NSString *output = nil;
+        task.standardError = errors;
+        NSString *output = nil, *reason = nil;
         if ([task launchAndReturnError:nil]) {
+            // diapatch writes little to stderr, so reading stdout first can't leave it blocked on a full pipe.
             NSData *data = [pipe.fileHandleForReading readDataToEndOfFile];
             [task waitUntilExit];
             if (task.terminationStatus == 0) output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+            else reason = DPReasonIn([errors.fileHandleForReading readDataToEndOfFile]);
         }
-        if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(output); });
+        if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(output, reason); });
     });
+}
+
+void DPRunCLI(NSArray<NSString *> *args, void (^completion)(NSString *output)) {
+    DPRunCLIReporting(args, ^(NSString *output, NSString *reason) { if (completion) completion(output); });
 }
 
 void DPHandOffAndQuit(NSArray<NSString *> *args) {
@@ -54,7 +68,7 @@ void DPHandOffAndQuit(NSArray<NSString *> *args) {
 @implementation DPUpdates {
     NSMutableDictionary<NSString *, NSMutableArray *> *_whenDownloaded;
     NSMutableArray *_checked;
-    NSMutableSet<NSString *> *_failed;
+    NSMutableDictionary<NSString *, NSString *> *_failed;  // part → why its download failed, or @"" if unknown
     NSTimer *_progress;
     NSDictionary *_found;
     NSMutableDictionary<NSString *, id> *_pretend;  // part → @"available", the NSDate its download started, or @"staged"
@@ -71,7 +85,7 @@ void DPHandOffAndQuit(NSArray<NSString *> *args) {
     if (!(self = [super init])) return nil;
     _whenDownloaded = [NSMutableDictionary new];
     _checked = [NSMutableArray new];
-    _failed = [NSMutableSet new];
+    _failed = [NSMutableDictionary new];
     _pretend = [NSMutableDictionary new];
     return self;
 }
@@ -114,7 +128,8 @@ void DPHandOffAndQuit(NSArray<NSString *> *args) {
 - (BOOL)available:(NSString *)part { return [self.found[part][@"available"] boolValue]; }
 - (BOOL)staged:(NSString *)part { return [self.found[part][@"staged"] isKindOfClass:NSString.class]; }
 - (BOOL)downloading:(NSString *)part { return _whenDownloaded[part] != nil; }
-- (BOOL)failed:(NSString *)part { return [_failed containsObject:part]; }
+- (BOOL)failed:(NSString *)part { return _failed[part] != nil; }
+- (NSString *)failure:(NSString *)part { return _failed[part].length ? _failed[part] : nil; }
 
 - (double)progress:(NSString *)part {
     if ([_pretend[part] isKindOfClass:NSDate.class]) return MIN(-[_pretend[part] timeIntervalSinceNow] / 3, 1);
@@ -131,15 +146,15 @@ void DPHandOffAndQuit(NSArray<NSString *> *args) {
         return;
     }
     _whenDownloaded[part] = done ? [NSMutableArray arrayWithObject:done] : [NSMutableArray new];
-    [_failed removeObject:part];
+    [_failed removeObjectForKey:part];
     if (!_progress) _progress = [NSTimer scheduledTimerWithTimeInterval:0.25 repeats:YES block:^(NSTimer *_) { [self tick]; }];
     [self changed];
     if (_pretend[part]) {
         _pretend[part] = NSDate.date;
         return;
     }
-    DPRunCLI(@[[part isEqual:DPDia] ? @"update" : @"self-update"], ^(NSString *output) {
-        if (!output) [self->_failed addObject:part];
+    DPRunCLIReporting(@[[part isEqual:DPDia] ? @"update" : @"self-update"], ^(NSString *output, NSString *reason) {
+        if (!output) self->_failed[part] = reason ?: @"";
         [self finishDownload:part];
     });
 }

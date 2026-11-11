@@ -4,9 +4,11 @@ void DPInstallGroupTabs(void);
 
 id DPCommandBrowser(void);
 NSWindow *DPBrowserWindow(id browser);
+id DPBrowserOfWindow(NSWindow *window);
 id DPGroupingDelegate(id browser);
 NSArray *DPTrackedContents(id browser);
 long long DPSessionOf(id contents);
+long long DPActiveSession(id browser);  // The session of the tab in front, or 0.
 
 long long DPLongID(id value);
 id DPMsg(id object, SEL sel);
@@ -18,6 +20,7 @@ NSString *DPGroupTitle(NSString *domain);
 NSArray<NSDictionary *> *DPOps(NSArray<NSDictionary *> *tabs, NSArray *groups);
 NSString *DPRegistrableDomain(NSString *host);
 
+void DPMoveTab(id delegate, id browser, NSNumber *sid, NSInteger index, void (^done)(void));
 NSDictionary *DPTabPlaces(NSDictionary<NSNumber *, NSString *> *urls);
 void DPRestorePlaces(id delegate, id browser, NSDictionary *places);
 

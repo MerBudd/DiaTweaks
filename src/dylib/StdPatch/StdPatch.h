@@ -21,7 +21,7 @@ struct DPPatch {
     __unsafe_unretained NSString *coveredBy;   // While on, that patch does this one's job too, so this one is greyed out.
     __unsafe_unretained NSString *choice, *defaultChoice;  // Saved as the chosen item's representedObject.
     NSMenu *(*choices)(void);
-    NSArray<NSView *> *(*rows)(void);
+    NSArray<NSView *> *(*rows)(void);  // Under Options, or the heading in a view's identifier.
     // sharesShortcutWith: a menu action, such as @"undo:", whose item may use the same shortcut without a warning.
     __unsafe_unretained NSString *shortcut, *sharesShortcutWith;
     NSDictionary *(*defaultShortcut)(void);
@@ -61,6 +61,7 @@ NSString *DPAppSupport(NSString *path);
 NSString *DPRelayProblem(void);  // nil if diapatch and the original Dia it starts are in place.
 NSString *DPHostProblem(NSString *manifest, NSString *name);  // nil if the native host manifest at that path sends `name` to diapatch.
 extern NSNotificationName const DPPatchesDidChangeNotification;
+#define DPLeadingOption @"DPLeadingOption"  // A row's identifier that puts it first under Options, above the options.
 extern BOOL DPTesting;  // Under make test, which saves nothing and has no one to answer an alert.
 
 #pragma mark Hooks

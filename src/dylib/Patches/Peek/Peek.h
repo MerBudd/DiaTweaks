@@ -3,6 +3,7 @@
 extern DPPatch DPPeek, DPPeekPinnedLinks;
 
 typedef NS_ENUM(NSInteger, DPPeekExit) { DPPeekClose, DPPeekTab, DPPeekSplit };  // Also the controls' button tags.
+typedef NS_ENUM(NSInteger, DPPeekStep) { DPPeekBack, DPPeekForward, DPPeekReload, DPPeekStop };
 
 // ArcWebContentsNavigationDisposition, numbered differently from Chromium's. A Shift-click arrives as a popup.
 enum { DPIgnoreAction = 0, DPCurrentTab = 1, DPForegroundTab = 2, DPBackgroundTab = 3, DPNewWindow = 5, DPPopup = 6, DPSplitView = 9 };
@@ -14,7 +15,7 @@ enum { DPIgnoreAction = 0, DPCurrentTab = 1, DPForegroundTab = 2, DPBackgroundTa
 @end
 
 @interface DPPeekCard : NSView
-@property (nonatomic, strong) NSView *dim, *card, *shade, *clip, *host, *controls, *tabBadge;
+@property (nonatomic, strong) NSView *dim, *card, *shade, *clip, *host, *controls, *tabBadge, *toolbar, *toolbarZone;
 @property (nonatomic, strong) id<DPPeekPage> page;
 @property (nonatomic, weak) id sourceDelegate, source;
 @property (nonatomic, weak) NSView *pane;
@@ -43,6 +44,21 @@ DPPeekCard *DPPeekShowCard(NSWindow *window, id<DPPeekPage> page, NSView *warmHo
 NSView *DPPeekWarmHost(NSWindow *window, id<DPPeekPage> page);
 
 NSView *DPPeekControls(id target, SEL action);
+extern const CGFloat DPPeekToolbarHeight;
+NSView *DPPeekToolbarFor(id page);
+void DPPeekAddToolbar(DPPeekCard *peek);
+CGFloat DPPeekToolbarInset(DPPeekCard *peek);
+void DPPeekPlaceToolbar(DPPeekCard *peek);
+void DPPeekNavigate(id page, DPPeekStep step);
+NSView *DPPeekToolbarAddress(NSView *toolbar);
+NSView *DPPeekAddressFor(id page);
+NSView *DPPeekGlowFor(id page);
+void DPPeekRefreshAddress(NSView *address);
+void DPPeekEditAddress(NSView *address);
+BOOL DPPeekEditingAddress(NSView *address);
+void DPPeekEditToolbarAddress(DPPeekCard *peek);  // ⌘L: shows the toolbar if it's hidden, and edits its address.
+NSURL *DPPeekSearchURL(id page, NSString *text);
+BOOL DPPeekCopyURL(DPPeekCard *peek, NSEvent *event);  // Copy URL's shortcut, for the Peek's page. YES: handled.
 void DPPeekLayoutHints(NSView *controls, CGFloat availableRight);
 CATransform3D DPPeekScaled(NSView *view, CGFloat scale);
 CASpringAnimation *DPPeekSpring(NSString *keyPath, CFTimeInterval response, CGFloat dampingRatio);
@@ -53,6 +69,7 @@ void DPPeekHideTabBadge(DPPeekCard *peek);
 double DPPeekDarkness(void);
 double DPPeekResponse(void);
 BOOL DPPeekGenie(void);
+BOOL DPPeekShowsToolbar(void);
 NSArray<NSView *> *DPPeekSettingsRows(void);
 
 void DPPeekInstallPages(void);

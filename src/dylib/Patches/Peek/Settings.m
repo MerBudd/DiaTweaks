@@ -1,6 +1,8 @@
 #import "Patches/Peek/Peek.h"
+#import "Settings/Settings.h"
 
-static NSString *const DPPeekDarknessKey = @"peekDarkness", *const DPPeekSpeedKey = @"peekSpeed", *const DPPeekGenieKey = @"peekGenie";
+static NSString *const DPPeekDarknessKey = @"peekDarkness", *const DPPeekSpeedKey = @"peekSpeed", *const DPPeekGenieKey = @"peekGenie",
+                *const DPPeekToolbarKey = @"peekToolbar";
 
 static NSUserDefaults *DPSettings(void) {
     static NSUserDefaults *settings;
@@ -12,12 +14,13 @@ static NSUserDefaults *DPSettings(void) {
 static double DPPeekTuned(NSString *key) {
     id value = [DPSettings() objectForKey:key];
     if (value) return [value doubleValue];
-    return [@{ DPPeekDarknessKey : @0.45, DPPeekSpeedKey : @0.9, DPPeekGenieKey : @YES }[key] doubleValue];
+    return [@{ DPPeekDarknessKey : @0.45, DPPeekSpeedKey : @0.9, DPPeekGenieKey : @YES, DPPeekToolbarKey : @YES }[key] doubleValue];
 }
 
 double DPPeekDarkness(void) { return DPPeekTuned(DPPeekDarknessKey); }
 double DPPeekResponse(void) { return 0.24 / MAX(0.1, DPPeekTuned(DPPeekSpeedKey)); }  // iOS's response at 100%.
 BOOL DPPeekGenie(void) { return DPPeekTuned(DPPeekGenieKey) != 0; }
+BOOL DPPeekShowsToolbar(void) { return DPPeekTuned(DPPeekToolbarKey) != 0; }
 
 @interface DPPeekTuneRow : NSStackView <NSTextFieldDelegate>
 @property (copy) NSString *key;
@@ -79,20 +82,34 @@ static NSView *DPPeekSlider(NSString *title, NSString *key, double min, double m
     return row;
 }
 
-static NSView *DPPeekSwitch(NSString *title, NSString *key) {
+// Titled and described like the options Settings lists for a patch.
+static NSView *DPPeekSwitch(NSString *title, NSString *detail, NSString *key) {
     NSSwitch *toggle = [NSSwitch new];
+    toggle.controlSize = NSControlSizeSmall;  // As Settings' own switches.
     toggle.state = DPPeekTuned(key) ? NSControlStateValueOn : NSControlStateValueOff;
     toggle.action = @selector(tune:);
-    DPPeekTuneRow *row = DPPeekRow(title, key, 1, toggle);
+    NSStackView *lines = DPColumn(@[DPLabel(title, 13, NSFontWeightRegular, NSColor.labelColor),
+                                    DPLabel(detail, 11, NSFontWeightRegular, NSColor.secondaryLabelColor)], 2);
+    [lines setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [lines setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+    DPPeekTuneRow *row = [DPPeekTuneRow stackViewWithViews:@[ lines, toggle ]];
+    row.key = key;
+    row.scale = 1;
     row.distribution = NSStackViewDistributionFill;
+    row.spacing = 12;
     toggle.target = row;
     return row;
 }
 
 NSArray<NSView *> *DPPeekSettingsRows(void) {
+    NSView *toolbar = DPPeekSwitch(@"Show Address Toolbar",
+        @"Show back, forward, reload and the address across the top of the card, like Little Dia. It hides and shows with Hide Toolbar.",
+        DPPeekToolbarKey);
+    toolbar.identifier = DPLeadingOption;  // Above Drag Links and Pinned Tabs.
     return @[
+        toolbar,
+        DPPeekSwitch(@"Genie Effect", @"Grow the card out of the link you clicked, and shrink it back into it as it closes.", DPPeekGenieKey),
         DPPeekSlider(@"Darken the page behind", DPPeekDarknessKey, 0, 100, 100, @"%"),
         DPPeekSlider(@"Speed", DPPeekSpeedKey, 25, 300, 100, @"%"),
-        DPPeekSwitch(@"Genie effect", DPPeekGenieKey),
     ];
 }
