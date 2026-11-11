@@ -3,7 +3,7 @@
 #import "Patches/TurnOffAI/TurnOffAI.h"
 #import "Patches/CompactCommandBar/CompactCommandBar.h"
 
-extern DPPatch DPBYOK, DPBYOKModelPicker;
+extern DPPatch DPBYOK, DPBYOKModelPicker, DPBYOKMultipleProviders, DPBYOKBriefs, DPBYOKBriefsModel;
 
 extern NSString *const DPBYOKDiaDefaultModel;
 extern NSNotificationName const DPBYOKStateDidChangeNotification;
@@ -27,6 +27,14 @@ void DPBYOKSetFetchedModels(NSString *provider, NSArray<NSDictionary *> *models)
 NSString *DPBYOKDefaultModel(NSString *provider);
 void DPBYOKSetDefaultModel(NSString *provider, NSString *modelId);
 
+NSString *DPBYOKGetBriefsModel(NSString *provider);
+void DPBYOKSetBriefsModel(NSString *provider, NSString *modelId);
+
+#define DPBYOK_OVERLOAD(_0, _1, NAME, ...) NAME
+#define DPBYOKBriefsModel0() DPBYOKGetBriefsModel(nil)
+#define DPBYOKBriefsModel1(p) DPBYOKGetBriefsModel(p)
+#define DPBYOKBriefsModel(...) DPBYOK_OVERLOAD(dummy, ##__VA_ARGS__, DPBYOKBriefsModel1, DPBYOKBriefsModel0)(__VA_ARGS__)
+
 NSString *DPBYOKActiveModel(void);
 void DPBYOKSetActiveModel(NSString *modelId);
 
@@ -45,9 +53,11 @@ void DPBYOKFetchModels(NSString *provider, NSString *apiKey, void (^completion)(
 
 // Menu.m
 NSMenu *DPBYOKBuildModelMenu(BOOL includeDiaDefault, BOOL isDefaultPicker);
+NSMenu *DPBYOKBuildBriefsModelMenu(BOOL includeDiaDefault);
 
 // Settings.m
 NSArray<NSView *> *DPBYOKRows(void);
+NSArray<NSView *> *DPBYOKBriefsRows(void);
 
 // Picker.m
 void DPInstallBYOKPicker(void);
@@ -63,7 +73,7 @@ void DPBYOKRestartAgentServersIfNeeded(void);
 // Router.m / Translator.m / Gemini.m
 typedef void (^DPBYOKStreamCallback)(NSInteger statusCode, NSDictionary *headers, NSString *data, BOOL done, NSString *errorMessage);
 
-void DPBYOKExecuteLLMRequest(NSString *endpoint, NSDictionary *headers, NSString *bodyString, DPBYOKStreamCallback callback);
+void DPBYOKExecuteLLMRequest(NSString *endpoint, NSDictionary *headers, NSString *bodyString, NSString *agentSpec, DPBYOKStreamCallback callback);
 NSDictionary *DPBYOKTranslateAnthropicToOpenAI(NSDictionary *anthropicBody, NSString *provider, NSString *modelId, NSString *thinkingLevel);
 void DPBYOKStreamOpenAIResponse(NSURLRequest *request, NSString *modelId, DPBYOKStreamCallback callback);
 void DPBYOKExecuteGeminiRequest(NSDictionary *anthropicBody, NSString *apiKey, NSString *modelId, NSString *thinkingLevel, DPBYOKStreamCallback callback);

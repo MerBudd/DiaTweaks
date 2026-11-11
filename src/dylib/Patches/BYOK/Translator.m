@@ -42,15 +42,31 @@ static NSString *DPBYOKFormatSSEEvent(NSString *eventName, NSDictionary *dataDic
 NSDictionary *DPBYOKTranslateAnthropicToOpenAI(NSDictionary *anthropicBody, NSString *provider, NSString *modelId, NSString *thinkingLevel) {
     NSMutableDictionary *openAIBody = [NSMutableDictionary dictionary];
 
+    // Determine reasoning model support
+    NSString *lowerModelId = [modelId lowercaseString];
+    NSArray<NSString *> *levels = DPBYOKThinkingLevelsForModel(provider, modelId);
+    BOOL isReasoningModel = (levels.count > 0) ||
+                            [lowerModelId hasPrefix:@"o1"] ||
+                            [lowerModelId hasPrefix:@"o3"] ||
+                            [lowerModelId hasPrefix:@"o4"] ||
+                            [lowerModelId hasPrefix:@"gpt-5"] ||
+                            [lowerModelId containsString:@"o1-"] ||
+                            [lowerModelId containsString:@"o3-"] ||
+                            [lowerModelId containsString:@"o4-"] ||
+                            [lowerModelId containsString:@"gpt-5"];
+
     // 1. Basic configuration
     openAIBody[@"stream"] = @YES;
+    openAIBody[@"stream_options"] = @{ @"include_usage": @YES };
     openAIBody[@"model"] = modelId ?: @"";
 
     id maxTokens = anthropicBody[@"max_tokens"];
-    if ([maxTokens respondsToSelector:@selector(integerValue)] && [maxTokens integerValue] > 0) {
-        openAIBody[@"max_completion_tokens"] = maxTokens;
+    NSInteger requestedTokens = [maxTokens respondsToSelector:@selector(integerValue)] ? [maxTokens integerValue] : 8192;
+    if (requestedTokens <= 0) requestedTokens = 8192;
+    if (isReasoningModel) {
+        openAIBody[@"max_completion_tokens"] = @(MAX(16384, requestedTokens));
     } else {
-        openAIBody[@"max_completion_tokens"] = @8192;
+        openAIBody[@"max_completion_tokens"] = @(requestedTokens);
     }
 
     NSMutableArray *messages = [NSMutableArray array];
@@ -83,8 +99,9 @@ NSDictionary *DPBYOKTranslateAnthropicToOpenAI(NSDictionary *anthropicBody, NSSt
     }
 
     if (systemText && systemText.length > 0) {
+        NSString *systemRole = isReasoningModel ? @"developer" : @"system";
         [messages addObject:@{
-            @"role": @"system",
+            @"role": systemRole,
             @"content": systemText
         }];
     }
@@ -273,7 +290,73 @@ NSDictionary *DPBYOKTranslateAnthropicToOpenAI(NSDictionary *anthropicBody, NSSt
             }
         }
     }
-    openAIBody[@"messages"] = messages;
+    // Validate assistant tool_calls matching tool responses
+    NSMutableSet<NSString *> *availableToolResponses = [NSMutableSet set];
+    for (NSDictionary *m in messages) {
+        if ([m[@"role"] isEqualToString:@"tool"]) {
+            NSString *callId = m[@"tool_call_id"];
+            if ([callId isKindOfClass:[NSString class]] && callId.length > 0) {
+                [availableToolResponses addObject:callId];
+            }
+        }
+    }
+
+    NSMutableSet<NSString *> *declaredToolCalls = [NSMutableSet set];
+    for (NSDictionary *m in messages) {
+        if ([m[@"role"] isEqualToString:@"assistant"]) {
+            NSArray *tcs = m[@"tool_calls"];
+            if ([tcs isKindOfClass:[NSArray class]]) {
+                for (NSDictionary *tc in tcs) {
+                    NSString *cid = tc[@"id"];
+                    if ([cid isKindOfClass:[NSString class]] && cid.length > 0) {
+                        [declaredToolCalls addObject:cid];
+                    }
+                }
+            }
+        }
+    }
+
+    NSMutableSet<NSString *> *validToolCallIds = [NSMutableSet setWithSet:declaredToolCalls];
+    [validToolCallIds intersectSet:availableToolResponses];
+
+    NSMutableArray *validatedMessages = [NSMutableArray arrayWithCapacity:messages.count];
+    for (id mObj in messages) {
+        if (![mObj isKindOfClass:[NSDictionary class]]) continue;
+        NSMutableDictionary *m = [mObj mutableCopy];
+        NSString *role = m[@"role"];
+
+        if ([role isEqualToString:@"tool"]) {
+            NSString *callId = m[@"tool_call_id"];
+            if (!callId || ![validToolCallIds containsObject:callId]) {
+                // Strip orphaned tool response
+                continue;
+            }
+            [validatedMessages addObject:m];
+        } else if ([role isEqualToString:@"assistant"]) {
+            NSArray *tcs = m[@"tool_calls"];
+            if ([tcs isKindOfClass:[NSArray class]] && tcs.count > 0) {
+                NSMutableArray *validTCs = [NSMutableArray array];
+                for (NSDictionary *tc in tcs) {
+                    NSString *cid = tc[@"id"];
+                    if (cid && [validToolCallIds containsObject:cid]) {
+                        [validTCs addObject:tc];
+                    }
+                }
+                if (validTCs.count > 0) {
+                    m[@"tool_calls"] = validTCs;
+                } else {
+                    [m removeObjectForKey:@"tool_calls"];
+                    if (m[@"content"] == [NSNull null] || !m[@"content"] || ([m[@"content"] isKindOfClass:[NSString class]] && ((NSString *)m[@"content"]).length == 0)) {
+                        m[@"content"] = @" ";
+                    }
+                }
+            }
+            [validatedMessages addObject:m];
+        } else {
+            [validatedMessages addObject:m];
+        }
+    }
+    openAIBody[@"messages"] = validatedMessages;
 
     // 4. Tools conversion
     id toolsObj = anthropicBody[@"tools"];
@@ -336,14 +419,9 @@ NSDictionary *DPBYOKTranslateAnthropicToOpenAI(NSDictionary *anthropicBody, NSSt
     }
 
     // 6. Reasoning / Thinking level
-    NSArray<NSString *> *levels = DPBYOKThinkingLevelsForModel(provider, modelId);
-    BOOL isReasoningModel = (levels.count > 0);
-
     if (isReasoningModel && thinkingLevel.length > 0) {
         if ([thinkingLevel isEqualToString:@"off"]) {
-            if ([modelId hasPrefix:@"gpt-5"]) {
-                openAIBody[@"reasoning_effort"] = @"none";
-            }
+            // Omit reasoning_effort on gpt-5* and when off (do not set to "none")
         } else if ([@"minimal" isEqualToString:thinkingLevel]) {
             openAIBody[@"reasoning_effort"] = @"low";
         } else {
@@ -386,6 +464,7 @@ typedef NS_ENUM(NSInteger, DPBYOKOpenAIBlockType) {
 @property (nonatomic, assign) BOOL hasOpenedToolCall;
 @property (nonatomic, copy) NSString *rawFinishReason;
 @property (nonatomic, assign) NSInteger outputTokens;
+@property (nonatomic, assign) NSInteger inputTokens;
 
 // Tool call streaming tracking
 @property (nonatomic, assign) NSInteger lastToolCallIndex;
@@ -407,6 +486,7 @@ typedef NS_ENUM(NSInteger, DPBYOKOpenAIBlockType) {
         _currentBlockIndex = -1;
         _lastToolCallIndex = -1;
         _outputTokens = 0;
+        _inputTokens = 0;
     }
     return self;
 }
@@ -514,6 +594,13 @@ didReceiveResponse:(NSURLResponse *)response
             NSInteger ct = [completionTokens integerValue];
             if (ct > 0) {
                 self.outputTokens = ct;
+            }
+        }
+        id promptTokens = usageObj[@"prompt_tokens"];
+        if ([promptTokens respondsToSelector:@selector(integerValue)]) {
+            NSInteger pt = [promptTokens integerValue];
+            if (pt > 0) {
+                self.inputTokens = pt;
             }
         }
     }
@@ -862,15 +949,18 @@ didReceiveResponse:(NSURLResponse *)response
     }
 
     NSString *stopReason = [self mappedStopReason];
+    NSMutableDictionary *usageDict = [NSMutableDictionary dictionary];
+    usageDict[@"output_tokens"] = @(MAX(1, self.outputTokens));
+    if (self.inputTokens > 0) {
+        usageDict[@"input_tokens"] = @(self.inputTokens);
+    }
     NSDictionary *msgDeltaDict = @{
         @"type": @"message_delta",
         @"delta": @{
             @"stop_reason": stopReason,
             @"stop_sequence": [NSNull null]
         },
-        @"usage": @{
-            @"output_tokens": @(MAX(1, self.outputTokens))
-        }
+        @"usage": usageDict
     };
     [finalSSE appendString:DPBYOKFormatSSEEvent(@"message_delta", msgDeltaDict)];
     [finalSSE appendString:@"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"];

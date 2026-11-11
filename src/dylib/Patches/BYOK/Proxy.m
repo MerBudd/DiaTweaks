@@ -38,6 +38,7 @@ static BOOL DPSocketWriteAll(int fd, const void *buf, size_t len) {
 @property (nonatomic, assign) BOOL isClosed;
 @property (nonatomic, strong) NSObject *diaWriteLock;
 @property (nonatomic, strong) NSObject *agentWriteLock;
+@property (nonatomic, copy) NSString *agentSpec;
 
 - (instancetype)initWithDiaFd:(int)diaFd agentFd:(int)agentFd;
 - (void)sendToDia:(NSString *)line;
@@ -55,6 +56,7 @@ static BOOL DPSocketWriteAll(int fd, const void *buf, size_t len) {
         _isClosed = NO;
         _diaWriteLock = [[NSObject alloc] init];
         _agentWriteLock = [[NSObject alloc] init];
+        _agentSpec = @"default";
     }
     return self;
 }
@@ -344,6 +346,7 @@ static BOOL DPSocketWriteAll(int fd, const void *buf, size_t len) {
             NSMutableDictionary *payload = [payloadObj isKindOfClass:[NSMutableDictionary class]] ? payloadObj : [payloadObj mutableCopy];
             msg[@"payload"] = payload;
             NSString *agentSpec = [payload[@"agent"] isKindOfClass:[NSString class]] ? payload[@"agent"] : @"default";
+            context.agentSpec = agentSpec;
             if (DPBYOKShouldRoute(agentSpec)) {
                 payload[@"dlp_reporting"] = @{@"enabled": @NO};
                 NSData *modData = [NSJSONSerialization dataWithJSONObject:msg options:0 error:nil];
@@ -401,7 +404,8 @@ static BOOL DPSocketWriteAll(int fd, const void *buf, size_t len) {
     NSString *type = msg[@"type"];
 
     if ([type isEqualToString:@"CHECK"]) {
-        if (DPBYOKShouldRoute(@"default")) {
+        NSString *agentSpec = context.agentSpec ?: @"default";
+        if (DPBYOKShouldRoute(agentSpec)) {
             NSString *checkMsgId = msg[@"msg"];
             if (checkMsgId && [checkMsgId isKindOfClass:[NSString class]]) {
                 [gCheckIdsLock lock];
@@ -414,7 +418,10 @@ static BOOL DPSocketWriteAll(int fd, const void *buf, size_t len) {
     }
 
     if ([type isEqualToString:@"LLM_REQUEST"]) {
-        NSString *agentSpec = msg[@"agent_spec"] ?: @"default";
+        NSString *agentSpec = msg[@"agent_spec"];
+        if (!agentSpec || ![agentSpec isKindOfClass:[NSString class]] || agentSpec.length == 0) {
+            agentSpec = context.agentSpec ?: @"default";
+        }
         if (DPBYOKShouldRoute(agentSpec)) {
             NSString *msgId = msg[@"msg"] ?: @"";
             NSDictionary *payload = [msg[@"payload"] isKindOfClass:[NSDictionary class]] ? msg[@"payload"] : @{};
@@ -432,7 +439,7 @@ static BOOL DPSocketWriteAll(int fd, const void *buf, size_t len) {
             }
 
             dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                DPBYOKExecuteLLMRequest(endpoint, headers, bodyStr, ^(NSInteger statusCode, NSDictionary *respHeaders, NSString *data, BOOL done, NSString *errorMessage) {
+                DPBYOKExecuteLLMRequest(endpoint, headers, bodyStr, agentSpec, ^(NSInteger statusCode, NSDictionary *respHeaders, NSString *data, BOOL done, NSString *errorMessage) {
                     if ([endpoint isEqualToString:@"count-tokens"] || [endpoint hasSuffix:@"count_tokens"] || [endpoint hasSuffix:@"count-tokens"]) {
                         NSDictionary *ackDict = @{
                             @"type": @"ACK",

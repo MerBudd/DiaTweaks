@@ -16,14 +16,19 @@
 @property (nonatomic, strong) NSButton *pasteButton;
 @property (nonatomic, strong) NSTextField *statusLabel;
 @property (nonatomic, strong) DPBYOKModelPopUpButton *defaultModelPicker;
+@property (nonatomic, strong) NSButton *fetchButton;
+@property (nonatomic, strong) DPBYOKModelPopUpButton *briefsModelPicker;
 
 + (instancetype)sharedController;
 - (void)providerChanged:(NSPopUpButton *)sender;
 - (void)pasteApiKey:(id)sender;
 - (void)submitApiKey:(id)sender;
+- (void)fetchModelsManual:(id)sender;
 - (void)defaultModelPickerChanged:(NSPopUpButton *)sender;
+- (void)briefsModelPickerChanged:(NSPopUpButton *)sender;
 - (void)saveAndFetchWithKey:(NSString *)key;
 - (void)refreshDefaultModelPicker;
+- (void)refreshBriefsModelPicker;
 - (void)syncControls;
 @end
 
@@ -83,6 +88,7 @@
     }
 
     [self refreshDefaultModelPicker];
+    [self refreshBriefsModelPicker];
 }
 
 - (void)providerChanged:(NSPopUpButton *)sender {
@@ -107,6 +113,7 @@
     }
 
     [self refreshDefaultModelPicker];
+    [self refreshBriefsModelPicker];
     DPBYOKNotifyStateChanged();
 }
 
@@ -117,7 +124,23 @@
         NSString *trimmed = [pasted stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
         self.apiKeyField.stringValue = trimmed;
         [self saveAndFetchWithKey:trimmed];
+
+        if (self.apiKeyField.window) {
+            [self.apiKeyField.window makeFirstResponder:self.apiKeyField];
+            NSText *editor = [self.apiKeyField currentEditor];
+            if (editor) {
+                NSRange endRange = NSMakeRange(trimmed.length, 0);
+                [editor setSelectedRange:endRange];
+                [editor scrollRangeToVisible:endRange];
+            }
+        }
     }
+}
+
+- (void)fetchModelsManual:(id)sender {
+    NSString *provider = DPBYOKProvider() ?: @"gemini";
+    NSString *apiKey = DPBYOKApiKey(provider) ?: @"";
+    [self saveAndFetchWithKey:apiKey];
 }
 
 - (void)submitApiKey:(id)sender {
@@ -140,6 +163,13 @@
         NSString *provider = DPBYOKProvider() ?: @"gemini";
         NSString *current = [self.apiKeyField.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
         DPBYOKSetApiKey(provider, current);
+        if (current.length == 0) {
+            self.statusLabel.stringValue = @"";
+            DPBYOKSetFetchedModels(provider, @[]);
+            [self refreshDefaultModelPicker];
+            [self refreshBriefsModelPicker];
+            DPBYOKNotifyStateChanged();
+        }
     }
 }
 
@@ -152,6 +182,15 @@
     }
 }
 
+- (void)briefsModelPickerChanged:(NSPopUpButton *)sender {
+    NSMenuItem *item = sender.selectedItem;
+    if (item && [item.representedObject isKindOfClass:NSString.class]) {
+        NSString *provider = DPBYOKProvider() ?: @"gemini";
+        DPBYOKSetBriefsModel(provider, item.representedObject);
+        DPBYOKNotifyStateChanged();
+    }
+}
+
 - (void)saveAndFetchWithKey:(NSString *)key {
     NSString *provider = DPBYOKProvider() ?: @"gemini";
     DPBYOKSetApiKey(provider, key);
@@ -160,6 +199,7 @@
         self.statusLabel.stringValue = @"";
         DPBYOKSetFetchedModels(provider, @[]);
         [self refreshDefaultModelPicker];
+        [self refreshBriefsModelPicker];
         DPBYOKNotifyStateChanged();
         return;
     }
@@ -171,13 +211,17 @@
         if (error) {
             self.statusLabel.stringValue = @"Error fetching models";
             self.statusLabel.textColor = NSColor.systemRedColor;
+            DPBYOKSetFetchedModels(provider, @[]);
+            [self refreshDefaultModelPicker];
+            [self refreshBriefsModelPicker];
+            DPBYOKNotifyStateChanged();
 
             NSAlert *alert = [NSAlert new];
             alert.alertStyle = NSAlertStyleWarning;
             NSString *title = DPBYOKProviderTitle(provider) ?: provider;
             alert.messageText = [NSString stringWithFormat:@"%@ API Error", title];
             alert.informativeText = error.localizedDescription ?: @"Unknown error occurred.";
-            [alert runModal];
+            if (!DPTesting) [alert runModal];
             return;
         }
 
@@ -199,47 +243,150 @@
         }
 
         [self refreshDefaultModelPicker];
+        [self refreshBriefsModelPicker];
         DPBYOKNotifyStateChanged();
     });
 }
 
 - (void)refreshDefaultModelPicker {
     NSString *provider = DPBYOKProvider() ?: @"gemini";
-    NSMenu *menu = DPBYOKBuildModelMenu(NO, YES);
+    BOOL multiProvider = DPBYOKMultipleProviders.on;
+    NSMenu *menu = DPBYOKBuildModelMenu(!multiProvider ? NO : YES, YES);
     self.defaultModelPicker.menu = menu;
 
-    NSArray<NSDictionary *> *models = DPBYOKFetchedModels(provider) ?: @[];
-    self.defaultModelPicker.hasModels = (models.count > 0);
-    if (models.count == 0) {
-        self.defaultModelPicker.enabled = NO;
-        self.defaultModelPicker.title = @"No Models Available";
-        return;
-    }
-    self.defaultModelPicker.enabled = DPBYOK.on;
+    if (multiProvider) {
+        BOOL anyKey = NO;
+        for (NSDictionary *p in DPBYOKProviders()) {
+            NSString *pid = p[@"id"] ?: p[@"key"];
+            if (DPBYOKApiKey(pid).length > 0) {
+                anyKey = YES;
+                break;
+            }
+        }
+        self.defaultModelPicker.hasModels = anyKey;
+        if (!anyKey) {
+            self.defaultModelPicker.enabled = NO;
+            self.defaultModelPicker.title = @"No Configured Providers";
+            return;
+        }
+        self.defaultModelPicker.enabled = DPBYOK.on;
 
-    NSString *defaultModelId = DPBYOKDefaultModel(provider);
-    NSMenuItem *selectedItem = nil;
-    for (NSMenuItem *item in menu.itemArray) {
-        if ([item.representedObject isEqual:defaultModelId]) {
-            selectedItem = item;
-            break;
+        NSString *defaultModelId = DPBYOKDefaultModel(provider);
+        NSString *modelTitle = DPBYOKDisplayNameForModel(provider, defaultModelId);
+        NSString *pTitle = DPBYOKProviderTitle(provider);
+        if ([defaultModelId isEqualToString:DPBYOKDiaDefaultModel]) {
+            self.defaultModelPicker.title = @"Dia Default";
+        } else if (pTitle.length > 0 && modelTitle.length > 0) {
+            self.defaultModelPicker.title = [NSString stringWithFormat:@"%@: %@", pTitle, modelTitle];
+        } else {
+            self.defaultModelPicker.title = modelTitle ?: @"Default Model";
+        }
+    } else {
+        NSArray<NSDictionary *> *models = DPBYOKFetchedModels(provider) ?: @[];
+        self.defaultModelPicker.hasModels = (models.count > 0);
+        if (models.count == 0) {
+            self.defaultModelPicker.enabled = NO;
+            self.defaultModelPicker.title = @"No Models Available";
+            return;
+        }
+        self.defaultModelPicker.enabled = DPBYOK.on;
+
+        NSString *defaultModelId = DPBYOKDefaultModel(provider);
+        NSMenuItem *selectedItem = nil;
+        for (NSMenuItem *item in menu.itemArray) {
+            if ([item.representedObject isEqual:defaultModelId]) {
+                selectedItem = item;
+                break;
+            }
+        }
+
+        if (selectedItem) {
+            [self.defaultModelPicker selectItem:selectedItem];
+            if (selectedItem.attributedTitle) {
+                self.defaultModelPicker.attributedTitle = selectedItem.attributedTitle;
+            } else {
+                self.defaultModelPicker.title = selectedItem.title;
+            }
+        } else if (menu.itemArray.count > 0) {
+            NSMenuItem *first = menu.itemArray.firstObject;
+            [self.defaultModelPicker selectItem:first];
+            if (first.attributedTitle) {
+                self.defaultModelPicker.attributedTitle = first.attributedTitle;
+            } else {
+                self.defaultModelPicker.title = first.title;
+            }
         }
     }
+}
 
-    if (selectedItem) {
-        [self.defaultModelPicker selectItem:selectedItem];
-        if (selectedItem.attributedTitle) {
-            self.defaultModelPicker.attributedTitle = selectedItem.attributedTitle;
-        } else {
-            self.defaultModelPicker.title = selectedItem.title;
+- (void)refreshBriefsModelPicker {
+    if (!self.briefsModelPicker) return;
+    NSString *provider = DPBYOKProvider() ?: @"gemini";
+    BOOL multiProvider = DPBYOKMultipleProviders.on;
+    NSMenu *menu = DPBYOKBuildBriefsModelMenu(!multiProvider ? NO : YES);
+    self.briefsModelPicker.menu = menu;
+
+    if (multiProvider) {
+        BOOL anyKey = NO;
+        for (NSDictionary *p in DPBYOKProviders()) {
+            NSString *pid = p[@"id"] ?: p[@"key"];
+            if (DPBYOKApiKey(pid).length > 0) {
+                anyKey = YES;
+                break;
+            }
         }
-    } else if (menu.itemArray.count > 0) {
-        NSMenuItem *first = menu.itemArray.firstObject;
-        [self.defaultModelPicker selectItem:first];
-        if (first.attributedTitle) {
-            self.defaultModelPicker.attributedTitle = first.attributedTitle;
+        self.briefsModelPicker.hasModels = anyKey;
+        if (!anyKey) {
+            self.briefsModelPicker.enabled = NO;
+            self.briefsModelPicker.title = @"No Configured Providers";
+            return;
+        }
+        self.briefsModelPicker.enabled = DPBYOK.on;
+
+        NSString *briefsModelId = DPBYOKBriefsModel(provider);
+        NSString *modelTitle = DPBYOKDisplayNameForModel(provider, briefsModelId);
+        NSString *pTitle = DPBYOKProviderTitle(provider);
+        if ([briefsModelId isEqualToString:DPBYOKDiaDefaultModel]) {
+            self.briefsModelPicker.title = @"Dia Default";
+        } else if (pTitle.length > 0 && modelTitle.length > 0) {
+            self.briefsModelPicker.title = [NSString stringWithFormat:@"%@: %@", pTitle, modelTitle];
         } else {
-            self.defaultModelPicker.title = first.title;
+            self.briefsModelPicker.title = modelTitle ?: @"Briefs Model";
+        }
+    } else {
+        NSArray<NSDictionary *> *models = DPBYOKFetchedModels(provider) ?: @[];
+        self.briefsModelPicker.hasModels = (models.count > 0);
+        if (models.count == 0) {
+            self.briefsModelPicker.enabled = NO;
+            self.briefsModelPicker.title = @"No Models Available";
+            return;
+        }
+        self.briefsModelPicker.enabled = DPBYOK.on;
+
+        NSString *briefsModelId = DPBYOKBriefsModel(provider);
+        NSMenuItem *selectedItem = nil;
+        for (NSMenuItem *item in menu.itemArray) {
+            if ([item.representedObject isEqual:briefsModelId]) {
+                selectedItem = item;
+                break;
+            }
+        }
+
+        if (selectedItem) {
+            [self.briefsModelPicker selectItem:selectedItem];
+            if (selectedItem.attributedTitle) {
+                self.briefsModelPicker.attributedTitle = selectedItem.attributedTitle;
+            } else {
+                self.briefsModelPicker.title = selectedItem.title;
+            }
+        } else if (menu.itemArray.count > 0) {
+            NSMenuItem *first = menu.itemArray.firstObject;
+            [self.briefsModelPicker selectItem:first];
+            if (first.attributedTitle) {
+                self.briefsModelPicker.attributedTitle = first.attributedTitle;
+            } else {
+                self.briefsModelPicker.title = first.title;
+            }
         }
     }
 }
@@ -279,6 +426,8 @@ NSArray<NSView *> *DPBYOKRows(void) {
 
     // Row 1: Provider
     NSTextField *providerLabel = DPLabel(@"Provider", 13, NSFontWeightRegular, NSColor.labelColor);
+    NSTextField *providerSubtitle = DPLabel(@"API keys entered for each provider persist across provider switches.", 11, NSFontWeightRegular, NSColor.secondaryLabelColor);
+    NSStackView *providerLeading = DPColumn(@[ providerLabel, providerSubtitle ], 2);
     NSPopUpButton *providerPicker = [NSPopUpButton new];
     providerPicker.controlSize = NSControlSizeRegular;
     providerPicker.target = controller;
@@ -312,7 +461,7 @@ NSArray<NSView *> *DPBYOKRows(void) {
         }
     }
     controller.providerPicker = providerPicker;
-    NSView *row1 = DPBYOKSettingsRow(providerLabel, providerPicker);
+    NSView *row1 = DPBYOKSettingsRow(providerLeading, providerPicker);
 
     // Row 2: API Key
     NSTextField *keyLabel = DPLabel(@"API Key", 13, NSFontWeightRegular, NSColor.labelColor);
@@ -327,6 +476,10 @@ NSArray<NSView *> *DPBYOKRows(void) {
     apiKeyField.target = controller;
     apiKeyField.action = @selector(submitApiKey:);
     apiKeyField.delegate = controller;
+    apiKeyField.usesSingleLineMode = YES;
+    apiKeyField.cell.scrollable = YES;
+    apiKeyField.cell.wraps = NO;
+    apiKeyField.cell.lineBreakMode = NSLineBreakByClipping;
     [apiKeyField.widthAnchor constraintEqualToConstant:210].active = YES;
     controller.apiKeyField = apiKeyField;
 
@@ -346,13 +499,38 @@ NSArray<NSView *> *DPBYOKRows(void) {
     defaultModelPicker.controlSize = NSControlSizeRegular;
     defaultModelPicker.target = controller;
     defaultModelPicker.action = @selector(defaultModelPickerChanged:);
-    [defaultModelPicker.widthAnchor constraintGreaterThanOrEqualToConstant:200].active = YES;
+    [defaultModelPicker.widthAnchor constraintGreaterThanOrEqualToConstant:180].active = YES;
     controller.defaultModelPicker = defaultModelPicker;
 
-    NSView *row3 = DPBYOKSettingsRow(defaultModelLabel, defaultModelPicker);
+    NSButton *fetchButton = [NSButton buttonWithTitle:@"Fetch models" target:controller action:@selector(fetchModelsManual:)];
+    fetchButton.bezelStyle = NSBezelStyleRounded;
+    fetchButton.controlSize = NSControlSizeRegular;
+    controller.fetchButton = fetchButton;
+
+    NSStackView *trailingModelStack = [NSStackView stackViewWithViews:@[ defaultModelPicker, fetchButton ]];
+    trailingModelStack.spacing = 8;
+    trailingModelStack.alignment = NSLayoutAttributeCenterY;
+
+    NSView *row3 = DPBYOKSettingsRow(defaultModelLabel, trailingModelStack);
 
     // Initial sync
     [controller syncControls];
 
     return @[ row1, row2, row3 ];
+}
+
+NSArray<NSView *> *DPBYOKBriefsRows(void) {
+    DPBYOKSettingsController *controller = [DPBYOKSettingsController sharedController];
+    NSTextField *modelLabel = DPLabel(@"Model", 13, NSFontWeightRegular, NSColor.labelColor);
+    DPBYOKModelPopUpButton *briefsModelPicker = [DPBYOKModelPopUpButton new];
+    briefsModelPicker.controlSize = NSControlSizeRegular;
+    briefsModelPicker.target = controller;
+    briefsModelPicker.action = @selector(briefsModelPickerChanged:);
+    [briefsModelPicker.widthAnchor constraintGreaterThanOrEqualToConstant:180].active = YES;
+    controller.briefsModelPicker = briefsModelPicker;
+
+    [controller refreshBriefsModelPicker];
+
+    NSView *row = DPBYOKSettingsRow(modelLabel, briefsModelPicker);
+    return @[ row ];
 }

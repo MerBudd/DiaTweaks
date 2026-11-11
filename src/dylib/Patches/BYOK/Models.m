@@ -163,7 +163,7 @@ static void DPBYOKFetchOpenAI(NSString *apiKey, void (^completion)(NSArray<NSDic
         }
 
         NSArray<NSString *> *allowedPrefixes = @[@"gpt-4", @"gpt-5", @"gpt-3.5", @"o1", @"o3", @"o4", @"chatgpt-"];
-        NSArray<NSString *> *excludedSubstrings = @[@"audio", @"realtime", @"tts", @"whisper", @"embedding", @"dall-e", @"moderation", @"transcribe", @"search"];
+        NSArray<NSString *> *excludedSubstrings = @[@"audio", @"realtime", @"tts", @"whisper", @"embedding", @"dall-e", @"moderation", @"transcribe", @"search", @"instruct", @"babbage", @"davinci"];
 
         NSMutableArray<NSDictionary *> *results = [NSMutableArray new];
         for (id item in rawModels) {

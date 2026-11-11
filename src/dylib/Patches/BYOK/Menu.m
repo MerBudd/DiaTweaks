@@ -8,6 +8,7 @@ static char kDPBYOKMenuConfigKey;
 @property (nonatomic, copy) NSString *modelId;
 @property (nonatomic, copy) NSString *thinkingLevel;
 @property (nonatomic, assign) BOOL isDefaultPicker;
+@property (nonatomic, assign) BOOL isBriefsPicker;
 @end
 
 @implementation DPBYOKMenuActionConfig
@@ -31,18 +32,32 @@ static char kDPBYOKMenuConfigKey;
 }
 
 - (void)selectModel:(NSMenuItem *)sender {
+    DPBYOKMenuActionConfig *cfg = objc_getAssociatedObject(sender, &kDPBYOKMenuConfigKey);
+    BOOL isDefault = cfg ? cfg.isDefaultPicker : NO;
+    BOOL isBriefs = cfg ? cfg.isBriefsPicker : NO;
+
     if ([sender.representedObject isEqual:DPBYOKDiaDefaultModel]) {
-        DPBYOKSetActiveModel(DPBYOKDiaDefaultModel);
+        if (isBriefs) {
+            DPBYOKSetBriefsModel(DPBYOKProvider(), DPBYOKDiaDefaultModel);
+        } else if (isDefault) {
+            DPBYOKSetDefaultModel(DPBYOKProvider(), DPBYOKDiaDefaultModel);
+        } else {
+            DPBYOKSetActiveModel(DPBYOKDiaDefaultModel);
+        }
         DPBYOKNotifyStateChanged();
         return;
     }
 
-    DPBYOKMenuActionConfig *cfg = objc_getAssociatedObject(sender, &kDPBYOKMenuConfigKey);
     NSString *modelId = cfg ? cfg.modelId : (NSString *)sender.representedObject;
     NSString *provider = cfg ? cfg.provider : DPBYOKProvider();
-    BOOL isDefault = cfg ? cfg.isDefaultPicker : NO;
 
-    if (isDefault) {
+    if (provider.length > 0) {
+        DPBYOKSetProvider(provider);
+    }
+
+    if (isBriefs) {
+        DPBYOKSetBriefsModel(provider, modelId);
+    } else if (isDefault) {
         DPBYOKSetDefaultModel(provider, modelId);
     } else {
         DPBYOKSetActiveModel(modelId);
@@ -54,8 +69,14 @@ static char kDPBYOKMenuConfigKey;
     DPBYOKMenuActionConfig *cfg = objc_getAssociatedObject(sender, &kDPBYOKMenuConfigKey);
     if (!cfg) return;
 
+    if (cfg.provider.length > 0) {
+        DPBYOKSetProvider(cfg.provider);
+    }
+
     DPBYOKSetThinkingLevel(cfg.provider, cfg.modelId, cfg.thinkingLevel);
-    if (cfg.isDefaultPicker) {
+    if (cfg.isBriefsPicker) {
+        DPBYOKSetBriefsModel(cfg.provider, cfg.modelId);
+    } else if (cfg.isDefaultPicker) {
         DPBYOKSetDefaultModel(cfg.provider, cfg.modelId);
     } else {
         DPBYOKSetActiveModel(cfg.modelId);
@@ -65,10 +86,11 @@ static char kDPBYOKMenuConfigKey;
 
 @end
 
-static NSMenuItem *DPBYOKCreateModelMenuItem(NSDictionary *model, NSString *provider, NSString *selectedModelId, BOOL isDefaultPicker, BOOL showDefaultBadge) {
+static NSMenuItem *DPBYOKCreateModelMenuItem(NSDictionary *model, NSString *provider, NSString *selectedModelId, BOOL isDefaultPicker, BOOL isBriefsPicker, BOOL showDefaultBadge) {
     NSString *modelId = model[@"id"];
     NSString *displayName = model[@"name"] ?: modelId;
-    BOOL isSelected = [modelId isEqualToString:selectedModelId];
+    NSString *activeProvider = DPBYOKProvider();
+    BOOL isSelected = [modelId isEqualToString:selectedModelId] && [provider isEqualToString:activeProvider];
 
     NSFont *nameFont = [NSFont systemFontOfSize:13 weight:isSelected ? NSFontWeightSemibold : NSFontWeightRegular];
     NSMutableAttributedString *attrTitle = [[NSMutableAttributedString alloc] initWithString:displayName attributes:@{
@@ -112,6 +134,7 @@ static NSMenuItem *DPBYOKCreateModelMenuItem(NSDictionary *model, NSString *prov
     cfg.provider = provider;
     cfg.modelId = modelId;
     cfg.isDefaultPicker = isDefaultPicker;
+    cfg.isBriefsPicker = isBriefsPicker;
     objc_setAssociatedObject(item, &kDPBYOKMenuConfigKey, cfg, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     if (thinkingLevels.count > 0) {
@@ -123,13 +146,14 @@ static NSMenuItem *DPBYOKCreateModelMenuItem(NSDictionary *model, NSString *prov
             NSMenuItem *levelItem = [[NSMenuItem alloc] initWithTitle:levelLabel action:@selector(selectThinkingLevel:) keyEquivalent:@""];
             levelItem.target = [DPBYOKMenuActionHandler sharedInstance];
             levelItem.representedObject = level;
-            levelItem.state = [level isEqualToString:currentLevel] ? NSControlStateValueOn : NSControlStateValueOff;
+            levelItem.state = (isSelected && [level isEqualToString:currentLevel]) ? NSControlStateValueOn : NSControlStateValueOff;
 
             DPBYOKMenuActionConfig *levelCfg = [DPBYOKMenuActionConfig new];
             levelCfg.provider = provider;
             levelCfg.modelId = modelId;
             levelCfg.thinkingLevel = level;
             levelCfg.isDefaultPicker = isDefaultPicker;
+            levelCfg.isBriefsPicker = isBriefsPicker;
             objc_setAssociatedObject(levelItem, &kDPBYOKMenuConfigKey, levelCfg, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
             [submenu addItem:levelItem];
@@ -140,14 +164,81 @@ static NSMenuItem *DPBYOKCreateModelMenuItem(NSDictionary *model, NSString *prov
     return item;
 }
 
-NSMenu *DPBYOKBuildModelMenu(BOOL includeDiaDefault, BOOL isDefaultPicker) {
-    NSString *provider = DPBYOKProvider() ?: @"gemini";
-    NSArray<NSDictionary *> *models = DPBYOKFetchedModels(provider) ?: @[];
+static NSMenu *DPBYOKBuildModelMenuEx(BOOL includeDiaDefault, BOOL isDefaultPicker, BOOL isBriefsPicker) {
+    BOOL multiProvider = DPBYOKMultipleProviders.on;
+    NSString *currentProvider = DPBYOKProvider() ?: @"gemini";
     NSString *activeModel = DPBYOKActiveModel();
-    NSString *defaultModelId = DPBYOKDefaultModel(provider);
-    NSString *selectedModelId = isDefaultPicker ? defaultModelId : activeModel;
+    NSString *defaultModelId = DPBYOKDefaultModel(currentProvider);
+    NSString *briefsModelId = DPBYOKBriefsModel(currentProvider);
+    NSString *selectedModelId = isBriefsPicker ? briefsModelId : (isDefaultPicker ? defaultModelId : activeModel);
 
-    NSMenu *menu = [[NSMenu alloc] initWithTitle:DPBYOKProviderTitle(provider) ?: @"Models"];
+    if (multiProvider) {
+        NSMenu *menu = [[NSMenu alloc] initWithTitle:@"Models"];
+        NSUInteger providerCount = 0;
+
+        for (NSDictionary *p in DPBYOKProviders()) {
+            NSString *pid = p[@"id"] ?: p[@"key"];
+            NSString *title = p[@"title"] ?: p[@"name"] ?: DPBYOKProviderTitle(pid);
+            NSString *key = DPBYOKApiKey(pid);
+            if (key.length == 0) continue;
+
+            providerCount++;
+            NSMenuItem *providerItem = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
+            BOOL isCurrentProvider = [pid isEqualToString:currentProvider] && ![selectedModelId isEqualToString:DPBYOKDiaDefaultModel];
+            providerItem.state = isCurrentProvider ? NSControlStateValueOn : NSControlStateValueOff;
+
+            NSMenu *providerSubmenu = [[NSMenu alloc] initWithTitle:title];
+            NSArray<NSDictionary *> *models = DPBYOKFetchedModels(pid) ?: @[];
+            NSString *providerDefault = isBriefsPicker ? DPBYOKBriefsModel(pid) : DPBYOKDefaultModel(pid);
+
+            for (NSDictionary *m in models) {
+                BOOL isDef = [m[@"id"] isEqualToString:providerDefault];
+                NSMenuItem *modelItem = DPBYOKCreateModelMenuItem(m, pid, selectedModelId, isDefaultPicker, isBriefsPicker, (!isDefaultPicker && !isBriefsPicker && isDef));
+                [providerSubmenu addItem:modelItem];
+            }
+
+            if (models.count == 0) {
+                NSMenuItem *none = [[NSMenuItem alloc] initWithTitle:@"No Models Fetched" action:nil keyEquivalent:@""];
+                none.enabled = NO;
+                [providerSubmenu addItem:none];
+            }
+
+            providerItem.submenu = providerSubmenu;
+            [menu addItem:providerItem];
+        }
+
+        if (providerCount == 0) {
+            NSMenuItem *none = [[NSMenuItem alloc] initWithTitle:@"No Configured Providers" action:nil keyEquivalent:@""];
+            none.enabled = NO;
+            [menu addItem:none];
+        }
+
+        [menu addItem:[NSMenuItem separatorItem]];
+
+        BOOL isDiaDefaultSelected = [selectedModelId isEqualToString:DPBYOKDiaDefaultModel];
+        NSMenuItem *diaDefaultItem = [[NSMenuItem alloc] initWithTitle:@"Dia Default" action:@selector(selectModel:) keyEquivalent:@""];
+        diaDefaultItem.target = [DPBYOKMenuActionHandler sharedInstance];
+        diaDefaultItem.representedObject = DPBYOKDiaDefaultModel;
+        diaDefaultItem.state = isDiaDefaultSelected ? NSControlStateValueOn : NSControlStateValueOff;
+
+        NSMutableAttributedString *diaAttr = [[NSMutableAttributedString alloc] initWithString:@"Dia Default" attributes:@{
+            NSFontAttributeName: [NSFont systemFontOfSize:13 weight:isDiaDefaultSelected ? NSFontWeightSemibold : NSFontWeightRegular],
+            NSForegroundColorAttributeName: NSColor.labelColor
+        }];
+        diaDefaultItem.attributedTitle = diaAttr;
+
+        DPBYOKMenuActionConfig *diaCfg = [DPBYOKMenuActionConfig new];
+        diaCfg.modelId = DPBYOKDiaDefaultModel;
+        diaCfg.isDefaultPicker = isDefaultPicker;
+        diaCfg.isBriefsPicker = isBriefsPicker;
+        objc_setAssociatedObject(diaDefaultItem, &kDPBYOKMenuConfigKey, diaCfg, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+        [menu addItem:diaDefaultItem];
+        return menu;
+    }
+
+    NSArray<NSDictionary *> *models = DPBYOKFetchedModels(currentProvider) ?: @[];
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:DPBYOKProviderTitle(currentProvider) ?: @"Models"];
 
     if (includeDiaDefault) {
         NSDictionary *defaultModelDict = nil;
@@ -161,7 +252,7 @@ NSMenu *DPBYOKBuildModelMenu(BOOL includeDiaDefault, BOOL isDefaultPicker) {
         }
 
         if (defaultModelDict) {
-            NSMenuItem *topItem = DPBYOKCreateModelMenuItem(defaultModelDict, provider, selectedModelId, isDefaultPicker, YES);
+            NSMenuItem *topItem = DPBYOKCreateModelMenuItem(defaultModelDict, currentProvider, selectedModelId, isDefaultPicker, isBriefsPicker, YES);
             [menu addItem:topItem];
             [menu addItem:[NSMenuItem separatorItem]];
         }
@@ -170,7 +261,7 @@ NSMenu *DPBYOKBuildModelMenu(BOOL includeDiaDefault, BOOL isDefaultPicker) {
             if (defaultModelDict && [m[@"id"] isEqualToString:defaultModelId]) {
                 continue;
             }
-            NSMenuItem *item = DPBYOKCreateModelMenuItem(m, provider, selectedModelId, isDefaultPicker, NO);
+            NSMenuItem *item = DPBYOKCreateModelMenuItem(m, currentProvider, selectedModelId, isDefaultPicker, isBriefsPicker, NO);
             [menu addItem:item];
         }
 
@@ -182,7 +273,7 @@ NSMenu *DPBYOKBuildModelMenu(BOOL includeDiaDefault, BOOL isDefaultPicker) {
 
         [menu addItem:[NSMenuItem separatorItem]];
 
-        BOOL isDiaDefaultSelected = [activeModel isEqualToString:DPBYOKDiaDefaultModel];
+        BOOL isDiaDefaultSelected = [selectedModelId isEqualToString:DPBYOKDiaDefaultModel];
         NSMenuItem *diaDefaultItem = [[NSMenuItem alloc] initWithTitle:@"Dia Default" action:@selector(selectModel:) keyEquivalent:@""];
         diaDefaultItem.target = [DPBYOKMenuActionHandler sharedInstance];
         diaDefaultItem.representedObject = DPBYOKDiaDefaultModel;
@@ -194,6 +285,12 @@ NSMenu *DPBYOKBuildModelMenu(BOOL includeDiaDefault, BOOL isDefaultPicker) {
         }];
         diaDefaultItem.attributedTitle = diaAttr;
 
+        DPBYOKMenuActionConfig *diaCfg = [DPBYOKMenuActionConfig new];
+        diaCfg.modelId = DPBYOKDiaDefaultModel;
+        diaCfg.isDefaultPicker = isDefaultPicker;
+        diaCfg.isBriefsPicker = isBriefsPicker;
+        objc_setAssociatedObject(diaDefaultItem, &kDPBYOKMenuConfigKey, diaCfg, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
         [menu addItem:diaDefaultItem];
     } else {
         if (models.count == 0) {
@@ -202,11 +299,19 @@ NSMenu *DPBYOKBuildModelMenu(BOOL includeDiaDefault, BOOL isDefaultPicker) {
             [menu addItem:none];
         } else {
             for (NSDictionary *m in models) {
-                NSMenuItem *item = DPBYOKCreateModelMenuItem(m, provider, selectedModelId, isDefaultPicker, NO);
+                NSMenuItem *item = DPBYOKCreateModelMenuItem(m, currentProvider, selectedModelId, isDefaultPicker, isBriefsPicker, NO);
                 [menu addItem:item];
             }
         }
     }
 
     return menu;
+}
+
+NSMenu *DPBYOKBuildModelMenu(BOOL includeDiaDefault, BOOL isDefaultPicker) {
+    return DPBYOKBuildModelMenuEx(includeDiaDefault, isDefaultPicker, NO);
+}
+
+NSMenu *DPBYOKBuildBriefsModelMenu(BOOL includeDiaDefault) {
+    return DPBYOKBuildModelMenuEx(includeDiaDefault, NO, YES);
 }

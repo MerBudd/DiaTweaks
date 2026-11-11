@@ -59,7 +59,37 @@ static NSView *DPWideRow(NSView *view) {
         [groups[title] addObject:row];
     };
     if (patch->choices) add(@"Options", [self choiceRowFor:patch]);
+    _rows = DPRowsOf(patch);
+    __block BOOL rowsAddedToOptions = NO;
+    void (^addRowsToOptions)(void) = ^{
+        if (!rowsAddedToOptions) {
+            for (NSView *view in self->_rows) {
+                if ([view.identifier isEqual:DPLeadingOption]) [groups[@"Options"] insertObject:DPWideRow(view) atIndex:0];
+                else add(view.identifier ?: @"Options", DPWideRow(view));
+            }
+            rowsAddedToOptions = YES;
+        }
+    };
+
+    NSMutableArray<NSValue *> *options = [NSMutableArray new];
     DPForEachOption(patch, ^(DPPatch *option) {
+        [options addObject:[NSValue valueWithPointer:option]];
+    });
+    [options sortUsingComparator:^NSComparisonResult(NSValue *v1, NSValue *v2) {
+        DPPatch *o1 = [v1 pointerValue];
+        DPPatch *o2 = [v2 pointerValue];
+        if ([o1->key isEqualToString:@"byokMultipleProviders"]) return NSOrderedAscending;
+        if ([o2->key isEqualToString:@"byokMultipleProviders"]) return NSOrderedDescending;
+        if ([o1->key isEqualToString:@"byokModelPicker"]) return NSOrderedDescending;
+        if ([o2->key isEqualToString:@"byokModelPicker"]) return NSOrderedAscending;
+        return NSOrderedSame;
+    }];
+
+    for (NSValue *v in options) {
+        DPPatch *option = [v pointerValue];
+        if ([option->key isEqualToString:@"byokModelPicker"]) {
+            addRowsToOptions();
+        }
         NSString *title = option->unavailable ? unavailable : option->section ?: @"Options";
         NSMutableArray<NSView *> *lines = [NSMutableArray arrayWithObjects:DPLabel(option->title, 13, NSFontWeightRegular, NSColor.labelColor),
                                            DPLabel(option->detail, 11, NSFontWeightRegular, NSColor.secondaryLabelColor), nil];
@@ -73,12 +103,8 @@ static NSView *DPWideRow(NSView *view) {
             add(title, row);
             [self->_optionChoices addObject:row];
         }
-    });
-    _rows = DPRowsOf(patch);
-    for (NSView *view in _rows) {
-        if ([view.identifier isEqual:DPLeadingOption]) [groups[@"Options"] insertObject:DPWideRow(view) atIndex:0];
-        else add(view.identifier ?: @"Options", DPWideRow(view));
     }
+    addRowsToOptions();
     if ([titles containsObject:unavailable]) {
         [titles removeObject:unavailable];
         [titles addObject:unavailable];

@@ -49,12 +49,18 @@ build/mouse-back-forward: tests/mouse-back-forward.m src/dylib/Patches/MouseBack
 build/vertical-tab-glow: tests/vertical-tab-glow.m $(wildcard src/dylib/Patches/HideVerticalTabGlow/*.[hm]) | build
 	clang $(CFLAGS) -Isrc/dylib -framework AppKit -framework QuartzCore -o $@ $<
 
-# Checks that need no Dia: grouping, the DiaTweaks update decision, mouse navigation, Hide Vertical Tab Glow, the Sidebar Grain textures, and that Settings shows each tweak like its neighbours.
-check: build/diapatch build/group-tabs build/mouse-back-forward build/vertical-tab-glow build/patches.json
+BYOK_COMPAT := $(addprefix src/dylib/Patches/BYOK/,Gemini.m Router.m Translator.m State.m Keychain.m)
+
+build/byok-compat: tests/byok-compat.m $(BYOK_COMPAT) src/dylib/Patches/BYOK/BYOK.h | build
+	clang $(CFLAGS) -Isrc/dylib -framework AppKit -framework Security -o $@ $(filter %.m,$^)
+
+# Checks that need no Dia: grouping, the DiaTweaks update decision, mouse navigation, Hide Vertical Tab Glow, the Sidebar Grain textures, BYOK provider compatibility, and that Settings shows each tweak like its neighbours.
+check: build/diapatch build/group-tabs build/mouse-back-forward build/vertical-tab-glow build/byok-compat build/patches.json
 	tests/tweaks-update
 	build/group-tabs
 	build/mouse-back-forward
 	build/vertical-tab-glow
+	build/byok-compat
 	tests/sidebar-grain
 	scripts/check-patches
 

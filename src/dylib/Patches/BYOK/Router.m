@@ -1,5 +1,9 @@
 #import "Patches/BYOK/BYOK.h"
 
+__attribute__((weak)) extern DPPatch DPBYOK;
+__attribute__((weak)) extern DPPatch DPBYOKBriefs;
+__attribute__((weak)) extern DPPatch DPBYOKBriefsModel;
+
 #pragma mark - Anthropic SSE Error Formatter
 
 static NSString *DPBYOKAnthropicSSEError(NSString *message) {
@@ -68,7 +72,47 @@ static void DPBYOKStripThinkingBlocksFromMessages(NSMutableDictionary *body) {
     body[@"messages"] = cleanedMessages;
 }
 
-static void DPBYOKSanitizeAnthropicBody(NSMutableDictionary *body) {
+static void DPBYOKStripUnsignedThinkingBlocksFromMessages(NSMutableDictionary *body) {
+    NSArray *messages = body[@"messages"];
+    if (![messages isKindOfClass:[NSArray class]]) return;
+
+    NSMutableArray *cleanedMessages = [NSMutableArray arrayWithCapacity:messages.count];
+    for (id msgObj in messages) {
+        if (![msgObj isKindOfClass:[NSDictionary class]]) {
+            [cleanedMessages addObject:msgObj];
+            continue;
+        }
+        NSMutableDictionary *msg = [msgObj mutableCopy];
+        if ([msg[@"role"] isEqualToString:@"assistant"]) {
+            id content = msg[@"content"];
+            if ([content isKindOfClass:[NSArray class]]) {
+                NSMutableArray *cleanedBlocks = [NSMutableArray array];
+                for (id blockObj in content) {
+                    if ([blockObj isKindOfClass:[NSDictionary class]]) {
+                        NSDictionary *block = (NSDictionary *)blockObj;
+                        NSString *type = block[@"type"];
+                        if ([type isEqualToString:@"thinking"]) {
+                            id sig = block[@"signature"];
+                            if (![sig isKindOfClass:[NSString class]] || ((NSString *)sig).length == 0) {
+                                // Strip unsigned thinking block across provider/model transitions
+                                continue;
+                            }
+                        }
+                    }
+                    [cleanedBlocks addObject:blockObj];
+                }
+                if (cleanedBlocks.count == 0) {
+                    cleanedBlocks = [NSMutableArray arrayWithObject:@{@"type": @"text", @"text": @"..."}];
+                }
+                msg[@"content"] = cleanedBlocks;
+            }
+        }
+        [cleanedMessages addObject:msg];
+    }
+    body[@"messages"] = cleanedMessages;
+}
+
+void DPBYOKSanitizeAnthropicBody(NSMutableDictionary *body) {
     NSSet *standardKeys = [NSSet setWithObjects:
         @"system",
         @"messages",
@@ -82,6 +126,7 @@ static void DPBYOKSanitizeAnthropicBody(NSMutableDictionary *body) {
         @"stream",
         @"thinking",
         @"model",
+        @"output_config",
         nil
     ];
 
@@ -96,6 +141,31 @@ static void DPBYOKSanitizeAnthropicBody(NSMutableDictionary *body) {
     } else {
         [body removeObjectForKey:@"metadata"];
     }
+
+    // Strip unsupported tool fields injected by Dia (DeferredToolPlaceholder and defer_loading)
+    id toolsObj = body[@"tools"];
+    if ([toolsObj isKindOfClass:[NSArray class]]) {
+        NSMutableArray *cleanedTools = [NSMutableArray array];
+        for (id toolItem in (NSArray *)toolsObj) {
+            if (![toolItem isKindOfClass:[NSDictionary class]]) continue;
+            NSString *toolName = toolItem[@"name"];
+            if ([toolName isKindOfClass:[NSString class]] && [toolName isEqualToString:@"DeferredToolPlaceholder"]) {
+                continue;
+            }
+            NSMutableDictionary *cleanedTool = [toolItem mutableCopy];
+            [cleanedTool removeObjectForKey:@"defer_loading"];
+            [cleanedTools addObject:cleanedTool];
+        }
+        if (cleanedTools.count > 0) {
+            body[@"tools"] = cleanedTools;
+        } else {
+            [body removeObjectForKey:@"tools"];
+            [body removeObjectForKey:@"tool_choice"];
+        }
+    }
+
+    // Strip unsigned thinking blocks across provider transitions
+    DPBYOKStripUnsignedThinkingBlocksFromMessages(body);
 
     for (NSString *key in body.allKeys) {
         if (![standardKeys containsObject:key] && ![key isEqualToString:@"metadata"]) {
@@ -115,6 +185,7 @@ static void DPBYOKSanitizeAnthropicBody(NSMutableDictionary *body) {
 @property (nonatomic, copy) DPBYOKStreamCallback callback;
 @property (nonatomic, assign) NSInteger statusCode;
 @property (nonatomic, strong) NSMutableData *accumulatedErrorData;
+@property (nonatomic, strong) NSMutableData *byteBuffer;
 @property (nonatomic, assign) BOOL finished;
 @property (nonatomic, strong) NSURLSession *session;
 @property (nonatomic, strong) NSURLSessionDataTask *task;
@@ -127,6 +198,7 @@ static void DPBYOKSanitizeAnthropicBody(NSMutableDictionary *body) {
     if (self) {
         _callback = [callback copy];
         _accumulatedErrorData = [NSMutableData data];
+        _byteBuffer = [NSMutableData data];
     }
     return self;
 }
@@ -151,42 +223,65 @@ didReceiveResponse:(NSURLResponse *)response
             [self.accumulatedErrorData appendData:data];
             return;
         }
+
+        [self.byteBuffer appendData:data];
+        [self processByteBuffer];
     }
+}
 
-    NSString *chunkStr = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    if (!chunkStr || chunkStr.length == 0) return;
+- (void)processByteBuffer {
+    while (self.byteBuffer.length > 0) {
+        if (self.finished) return;
+        const uint8_t *bytes = (const uint8_t *)self.byteBuffer.bytes;
+        NSUInteger len = self.byteBuffer.length;
+        const void *nl = memchr(bytes, '\n', len);
+        if (!nl) break;
 
-    BOOL hasStop = [chunkStr containsString:@"event: message_stop"] ||
-                   [chunkStr containsString:@"\"type\":\"message_stop\""] ||
-                   [chunkStr containsString:@"\"type\": \"message_stop\""] ||
-                   [chunkStr containsString:@"message_stop"];
+        NSUInteger lineLen = (const uint8_t *)nl - bytes;
+        NSData *lineData = [self.byteBuffer subdataWithRange:NSMakeRange(0, lineLen)];
+        [self.byteBuffer replaceBytesInRange:NSMakeRange(0, lineLen + 1) withBytes:NULL length:0];
 
-    if (hasStop) {
-        DPBYOKStreamCallback cb = nil;
-        @synchronized (self) {
-            if (self.finished) return;
-            self.finished = YES;
-            cb = self.callback;
-            self.callback = nil;
-        }
+        NSString *line = [[NSString alloc] initWithData:lineData encoding:NSUTF8StringEncoding];
+        if (!line) continue;
 
-        if (cb) {
-            cb(200, @{@"content-type": @"text/event-stream"}, chunkStr, NO, nil);
-            cb(200, @{@"content-type": @"text/event-stream"}, @"", YES, nil);
-        }
+        NSString *trimmed = [line stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"\r\n"]];
+        trimmed = [trimmed stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
 
-        [dataTask cancel];
-        NSURLSession *sess = self.session;
-        self.session = nil;
-        self.task = nil;
-        [sess invalidateAndCancel];
-    } else {
-        DPBYOKStreamCallback cb = nil;
-        @synchronized (self) {
-            cb = self.callback;
-        }
-        if (cb) {
-            cb(200, @{@"content-type": @"text/event-stream"}, chunkStr, NO, nil);
+        BOOL hasStop = [trimmed isEqualToString:@"event: message_stop"] ||
+                       [trimmed isEqualToString:@"data: {\"type\":\"message_stop\"}"] ||
+                       [trimmed isEqualToString:@"data: {\"type\": \"message_stop\"}"];
+
+        NSString *lineWithNL = [line stringByAppendingString:@"\n"];
+
+        if (hasStop) {
+            DPBYOKStreamCallback cb = nil;
+            @synchronized (self) {
+                if (self.finished) return;
+                self.finished = YES;
+                cb = self.callback;
+                self.callback = nil;
+            }
+
+            if (cb) {
+                cb(200, @{@"content-type": @"text/event-stream"}, lineWithNL, NO, nil);
+                cb(200, @{@"content-type": @"text/event-stream"}, @"", YES, nil);
+            }
+
+            [self.task cancel];
+            NSURLSession *sess = self.session;
+            self.session = nil;
+            self.task = nil;
+            [sess invalidateAndCancel];
+            return;
+        } else {
+            DPBYOKStreamCallback cb = nil;
+            @synchronized (self) {
+                if (self.finished) return;
+                cb = self.callback;
+            }
+            if (cb) {
+                cb(200, @{@"content-type": @"text/event-stream"}, lineWithNL, NO, nil);
+            }
         }
     }
 }
@@ -255,6 +350,13 @@ didCompleteWithError:(NSError *)error {
             cb(200, @{@"content-type": @"text/event-stream"}, sseErr, YES, nil);
         }
     } else {
+        if (self.byteBuffer.length > 0) {
+            NSString *remaining = [[NSString alloc] initWithData:self.byteBuffer encoding:NSUTF8StringEncoding];
+            if (remaining && remaining.length > 0 && cb) {
+                cb(200, @{@"content-type": @"text/event-stream"}, remaining, NO, nil);
+            }
+            [self.byteBuffer setLength:0];
+        }
         if (cb) {
             cb(200, @{@"content-type": @"text/event-stream"}, @"", YES, nil);
         }
@@ -267,7 +369,7 @@ didCompleteWithError:(NSError *)error {
 
 #pragma mark - Main Entry Point
 
-void DPBYOKExecuteLLMRequest(NSString *endpoint, NSDictionary *headers, NSString *bodyString, DPBYOKStreamCallback callback) {
+void DPBYOKExecuteLLMRequest(NSString *endpoint, NSDictionary *headers, NSString *bodyString, NSString *agentSpec, DPBYOKStreamCallback callback) {
     // 1. Handle count-tokens
     if (endpoint && ([endpoint isEqualToString:@"count-tokens"] ||
                      [endpoint hasSuffix:@"count_tokens"] ||
@@ -297,11 +399,30 @@ void DPBYOKExecuteLLMRequest(NSString *endpoint, NSDictionary *headers, NSString
         (NSMutableDictionary *)parsedJSON : [parsedJSON mutableCopy];
 
     // 3. Read active BYOK settings
+    NSString *spec = agentSpec ?: @"default";
+    BOOL isBrief = ![spec isEqualToString:@"default"];
     NSString *provider = DPBYOKProvider();
     NSString *apiKey = DPBYOKApiKey(provider);
-    NSString *modelId = DPBYOKActiveModel();
+    NSString *modelId = nil;
+
+    if (isBrief && (&DPBYOKBriefs != NULL && DPBYOKBriefs.on)) {
+        if (&DPBYOKBriefsModel != NULL && DPBYOKBriefsModel.on) {
+            modelId = DPBYOKBriefsModel(provider);
+        }
+        if (!modelId || [modelId isEqualToString:DPBYOKDiaDefaultModel] || modelId.length == 0) {
+            modelId = DPBYOKDefaultModel(provider);
+        }
+    } else {
+        modelId = DPBYOKActiveModel();
+        if (!modelId || [modelId isEqualToString:DPBYOKDiaDefaultModel] || modelId.length == 0) {
+            modelId = DPBYOKDefaultModel(provider);
+        }
+    }
     if (!modelId || [modelId isEqualToString:DPBYOKDiaDefaultModel] || modelId.length == 0) {
-        modelId = DPBYOKDefaultModel(provider);
+        NSArray<NSDictionary *> *models = DPBYOKFetchedModels(provider);
+        if (models.count > 0) {
+            modelId = models.firstObject[@"id"];
+        }
     }
     NSString *thinkingLevel = DPBYOKThinkingLevel(provider, modelId);
 
@@ -353,18 +474,43 @@ void DPBYOKExecuteLLMRequest(NSString *endpoint, NSDictionary *headers, NSString
 
         DPBYOKSanitizeAnthropicBody(body);
 
+        // Omit thinking when tool_choice forces tool use (type == "tool" or type == "any")
+        BOOL forcesToolUse = NO;
+        id toolChoice = body[@"tool_choice"];
+        if ([toolChoice isKindOfClass:[NSDictionary class]]) {
+            NSString *tcType = toolChoice[@"type"];
+            if ([tcType isEqualToString:@"tool"] || [tcType isEqualToString:@"any"] || toolChoice[@"name"]) {
+                forcesToolUse = YES;
+            }
+        }
+
         NSArray<NSString *> *supportedThinkingLevels = DPBYOKThinkingLevelsForModel(provider, modelId);
         BOOL supportsThinking = (supportedThinkingLevels.count > 0);
+        NSString *lowerModelId = [modelId lowercaseString];
+        BOOL isAdaptiveModel = [lowerModelId containsString:@"4-6"] ||
+                               [lowerModelId containsString:@"adaptive"] ||
+                               [supportedThinkingLevels containsObject:@"adaptive"] ||
+                               [thinkingLevel isEqualToString:@"adaptive"];
 
-        if (supportsThinking) {
+        if (supportsThinking && !forcesToolUse) {
             if ([thinkingLevel isEqualToString:@"off"]) {
                 [body removeObjectForKey:@"thinking"];
+                [body removeObjectForKey:@"output_config"];
                 DPBYOKStripThinkingBlocksFromMessages(body);
                 if (!body[@"max_tokens"] || [body[@"max_tokens"] integerValue] <= 0) {
                     body[@"max_tokens"] = @4096;
                 }
-            } else if ([thinkingLevel isEqualToString:@"adaptive"]) {
+            } else if (isAdaptiveModel) {
+                NSString *effort = @"medium";
+                if ([thinkingLevel isEqualToString:@"low"] || [thinkingLevel isEqualToString:@"minimal"]) {
+                    effort = @"low";
+                } else if ([thinkingLevel isEqualToString:@"high"] || [thinkingLevel isEqualToString:@"xhigh"] || [thinkingLevel isEqualToString:@"max"]) {
+                    effort = @"high";
+                } else if ([thinkingLevel isEqualToString:@"medium"]) {
+                    effort = @"medium";
+                }
                 body[@"thinking"] = @{@"type": @"adaptive"};
+                body[@"output_config"] = @{@"effort": effort};
                 NSInteger currentMax = [body[@"max_tokens"] integerValue];
                 NSInteger targetMax = MAX(currentMax, 16384);
                 body[@"max_tokens"] = @(targetMax);
@@ -372,6 +518,7 @@ void DPBYOKExecuteLLMRequest(NSString *endpoint, NSDictionary *headers, NSString
                 [body removeObjectForKey:@"top_k"];
                 [body removeObjectForKey:@"top_p"];
             } else {
+                [body removeObjectForKey:@"output_config"];
                 NSInteger budget = 8192;
                 if ([thinkingLevel isEqualToString:@"minimal"]) {
                     budget = 1024;
@@ -403,6 +550,7 @@ void DPBYOKExecuteLLMRequest(NSString *endpoint, NSDictionary *headers, NSString
             }
         } else {
             [body removeObjectForKey:@"thinking"];
+            [body removeObjectForKey:@"output_config"];
             DPBYOKStripThinkingBlocksFromMessages(body);
             if (!body[@"max_tokens"] || [body[@"max_tokens"] integerValue] <= 0) {
                 body[@"max_tokens"] = @4096;

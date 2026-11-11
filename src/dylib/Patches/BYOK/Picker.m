@@ -92,8 +92,18 @@ static NSHashTable<DPBYOKPickerButton *> *gAllPickers;
     if (!modelTitle || modelTitle.length == 0) {
         modelTitle = @"Dia Default";
     }
-    if (modelTitle.length > 24) {
-        modelTitle = [[modelTitle substringToIndex:22] stringByAppendingString:@"…"];
+
+    BOOL multiProvider = DPBYOKMultipleProviders.on;
+    if (multiProvider && ![activeModel isEqualToString:DPBYOKDiaDefaultModel]) {
+        NSString *pTitle = DPBYOKProviderTitle(provider);
+        if (pTitle.length > 0 && ![modelTitle hasPrefix:pTitle]) {
+            modelTitle = [NSString stringWithFormat:@"%@: %@", pTitle, modelTitle];
+        }
+    }
+
+    NSUInteger maxLen = multiProvider ? 28 : 24;
+    if (modelTitle.length > maxLen) {
+        modelTitle = [[modelTitle substringToIndex:maxLen - 2] stringByAppendingString:@"…"];
     }
 
     NSMutableParagraphStyle *style = [NSMutableParagraphStyle new];
@@ -134,7 +144,7 @@ static NSHashTable<DPBYOKPickerButton *> *gAllPickers;
 
     self.attributedTitle = attrTitle;
     CGFloat width = ceil(attrTitle.size.width) + 18.0;
-    self.preferredWidth = MIN(210.0, MAX(72.0, width));
+    self.preferredWidth = MIN(220.0, MAX(72.0, width));
 }
 
 - (NSSize)intrinsicContentSize {

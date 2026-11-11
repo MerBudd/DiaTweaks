@@ -4,6 +4,8 @@ NSString *const DPBYOKDiaDefaultModel = @"__dia_default__";
 NSNotificationName const DPBYOKStateDidChangeNotification = @"DPBYOKStateDidChange";
 
 __attribute__((weak)) extern DPPatch DPBYOK;
+__attribute__((weak)) extern DPPatch DPBYOKBriefs;
+__attribute__((weak)) extern DPPatch DPBYOKBriefsModel;
 __attribute__((weak)) void DPUpdateAllBYOKPickers(void);
 
 static NSUserDefaults *DPBYOKDefaults(void) {
@@ -121,6 +123,29 @@ void DPBYOKSetDefaultModel(NSString *provider, NSString *modelId) {
         [DPBYOKDefaults() removeObjectForKey:key];
     }
     DPBYOKSetActiveModel(modelId);
+}
+
+#pragma mark - Briefs Model
+
+NSString *DPBYOKGetBriefsModel(NSString *provider) {
+    if (!provider || provider.length == 0) provider = DPBYOKProvider() ?: @"gemini";
+    NSString *key = [NSString stringWithFormat:@"byokBriefsModel_%@", provider];
+    NSString *saved = [DPBYOKDefaults() stringForKey:key];
+    if (saved && saved.length > 0) {
+        return saved;
+    }
+    return DPBYOKDefaultModel(provider);
+}
+
+void DPBYOKSetBriefsModel(NSString *provider, NSString *modelId) {
+    if (!provider || provider.length == 0) provider = DPBYOKProvider() ?: @"gemini";
+    NSString *key = [NSString stringWithFormat:@"byokBriefsModel_%@", provider];
+    if (modelId && modelId.length > 0) {
+        [DPBYOKDefaults() setObject:modelId forKey:key];
+    } else {
+        [DPBYOKDefaults() removeObjectForKey:key];
+    }
+    DPBYOKNotifyStateChanged();
 }
 
 #pragma mark - Active Model
@@ -268,7 +293,16 @@ BOOL DPBYOKShouldRoute(NSString *agentSpec) {
     }
     NSString *spec = agentSpec ?: @"default";
     if (![spec isEqualToString:@"default"]) {
-        return NO;
+        BOOL briefsOn = (&DPBYOKBriefs != NULL) ? DPBYOKBriefs.on : NO;
+        if (!briefsOn) {
+            return NO;
+        }
+        NSString *provider = DPBYOKProvider();
+        NSString *key = DPBYOKApiKey(provider);
+        if (!key || key.length == 0) {
+            return NO;
+        }
+        return YES;
     }
     NSString *activeModel = DPBYOKActiveModel();
     if (!activeModel || activeModel.length == 0 || [activeModel isEqualToString:DPBYOKDiaDefaultModel]) {

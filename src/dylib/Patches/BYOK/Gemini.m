@@ -33,12 +33,46 @@ static NSString *DPBYOKAnthropicSSEError(NSString *message) {
 
 #pragma mark - Tool Schema Sanitization
 
-static id DPBYOKSanitizeGeminiSchema(id schema) {
+static inline BOOL DPBYOKIsCFBoolean(id obj) {
+    return [obj isKindOfClass:[NSNumber class]] && (CFGetTypeID((__bridge CFTypeRef)obj) == CFBooleanGetTypeID());
+}
+
+static NSDictionary *DPBYOKLookupRef(NSString *ref, NSDictionary *rootSchema) {
+    if (![ref isKindOfClass:[NSString class]] || !rootSchema) return nil;
+    NSString *defName = nil;
+    if ([ref hasPrefix:@"#/$defs/"]) {
+        defName = [ref substringFromIndex:8];
+    } else if ([ref hasPrefix:@"#/definitions/"]) {
+        defName = [ref substringFromIndex:14];
+    } else if ([ref hasPrefix:@"#/"]) {
+        defName = [ref substringFromIndex:2];
+    } else {
+        defName = ref;
+    }
+
+    id target = nil;
+    id defs = rootSchema[@"$defs"];
+    if ([defs isKindOfClass:[NSDictionary class]]) {
+        target = defs[defName];
+    }
+    if (!target) {
+        id definitions = rootSchema[@"definitions"];
+        if ([definitions isKindOfClass:[NSDictionary class]]) {
+            target = definitions[defName];
+        }
+    }
+    return [target isKindOfClass:[NSDictionary class]] ? (NSDictionary *)target : nil;
+}
+
+static id DPBYOKSanitizeGeminiSchemaInternal(id schema, NSDictionary *rootSchema, NSMutableSet<NSString *> *visitedRefs) {
     if (![schema isKindOfClass:[NSDictionary class]]) {
         if ([schema isKindOfClass:[NSArray class]]) {
             NSMutableArray *arr = [NSMutableArray arrayWithCapacity:[schema count]];
             for (id item in (NSArray *)schema) {
-                [arr addObject:DPBYOKSanitizeGeminiSchema(item)];
+                id sanitizedItem = DPBYOKSanitizeGeminiSchemaInternal(item, rootSchema, visitedRefs);
+                if (sanitizedItem) {
+                    [arr addObject:sanitizedItem];
+                }
             }
             return arr;
         }
@@ -46,24 +80,35 @@ static id DPBYOKSanitizeGeminiSchema(id schema) {
     }
 
     NSDictionary *dict = (NSDictionary *)schema;
+
+    // Check $ref resolution with cycle guard
+    id refVal = dict[@"$ref"];
+    if ([refVal isKindOfClass:[NSString class]]) {
+        NSString *ref = (NSString *)refVal;
+        if ([visitedRefs containsObject:ref]) {
+            return @{@"type": @"object"};
+        }
+        [visitedRefs addObject:ref];
+        NSDictionary *target = DPBYOKLookupRef(ref, rootSchema);
+        id resolved = nil;
+        if (target) {
+            NSMutableDictionary *merged = [target mutableCopy];
+            for (NSString *k in dict) {
+                if (![k isEqualToString:@"$ref"]) {
+                    merged[k] = dict[k];
+                }
+            }
+            resolved = DPBYOKSanitizeGeminiSchemaInternal(merged, rootSchema, visitedRefs);
+        } else {
+            resolved = @{@"type": @"object"};
+        }
+        [visitedRefs removeObject:ref];
+        return resolved;
+    }
+
     NSMutableDictionary *sanitized = [NSMutableDictionary dictionaryWithCapacity:dict.count];
 
-    static NSSet<NSString *> *strippedKeys = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        strippedKeys = [NSSet setWithObjects:
-            @"$schema",
-            @"additionalProperties",
-            @"default",
-            @"examples",
-            @"title",
-            @"propertyNames",
-            @"const",
-            nil
-        ];
-    });
-
-    // 1. Handle "type" array (e.g. ["string", "null"])
+    // 1. Handle "type" and "nullable"
     id typeVal = dict[@"type"];
     BOOL isNullable = NO;
     if ([typeVal isKindOfClass:[NSArray class]]) {
@@ -83,61 +128,208 @@ static id DPBYOKSanitizeGeminiSchema(id schema) {
         if (isNullable) {
             sanitized[@"nullable"] = @YES;
         }
-    } else if (typeVal) {
+    } else if ([typeVal isKindOfClass:[NSString class]]) {
         sanitized[@"type"] = typeVal;
     }
 
-    // 2. Check "properties"
+    if (!sanitized[@"nullable"]) {
+        id nullableVal = dict[@"nullable"];
+        if (DPBYOKIsCFBoolean(nullableVal) && [nullableVal boolValue]) {
+            sanitized[@"nullable"] = @YES;
+        }
+    }
+
+    // 2. Handle "properties" (and merge properties from "allOf" if any)
+    NSMutableDictionary *sanitizedProps = [NSMutableDictionary dictionary];
     id propsObj = dict[@"properties"];
-    BOOL hasEmptyProperties = NO;
     if ([propsObj isKindOfClass:[NSDictionary class]]) {
         NSDictionary *propsDict = (NSDictionary *)propsObj;
-        if (propsDict.count == 0) {
-            hasEmptyProperties = YES;
-        } else {
-            NSMutableDictionary *sanitizedProps = [NSMutableDictionary dictionaryWithCapacity:propsDict.count];
-            for (NSString *key in propsDict) {
-                sanitizedProps[key] = DPBYOKSanitizeGeminiSchema(propsDict[key]);
+        for (NSString *key in propsDict) {
+            id propVal = DPBYOKSanitizeGeminiSchemaInternal(propsDict[key], rootSchema, visitedRefs);
+            if (propVal) {
+                sanitizedProps[key] = propVal;
             }
-            sanitized[@"properties"] = sanitizedProps;
         }
     }
 
-    // 3. Process remaining keys
-    for (NSString *key in dict) {
-        if ([strippedKeys containsObject:key]) {
-            continue;
-        }
-        if ([key isEqualToString:@"type"]) {
-            continue;
-        }
-        if ([key isEqualToString:@"properties"]) {
-            continue;
-        }
-        if ([key isEqualToString:@"required"]) {
-            if (hasEmptyProperties) {
-                continue;
+    id allOfObj = dict[@"allOf"];
+    if ([allOfObj isKindOfClass:[NSArray class]]) {
+        for (id subItem in (NSArray *)allOfObj) {
+            if ([subItem isKindOfClass:[NSDictionary class]]) {
+                id subProps = subItem[@"properties"];
+                if ([subProps isKindOfClass:[NSDictionary class]]) {
+                    for (NSString *key in (NSDictionary *)subProps) {
+                        if (!sanitizedProps[key]) {
+                            id propVal = DPBYOKSanitizeGeminiSchemaInternal(subProps[key], rootSchema, visitedRefs);
+                            if (propVal) {
+                                sanitizedProps[key] = propVal;
+                            }
+                        }
+                    }
+                }
             }
-            sanitized[@"required"] = dict[@"required"];
-            continue;
-        }
-        if ([key isEqualToString:@"items"]) {
-            sanitized[@"items"] = DPBYOKSanitizeGeminiSchema(dict[@"items"]);
-            continue;
-        }
-        id val = dict[key];
-        if ([val isKindOfClass:[NSDictionary class]] || [val isKindOfClass:[NSArray class]]) {
-            sanitized[key] = DPBYOKSanitizeGeminiSchema(val);
-        } else {
-            sanitized[key] = val;
         }
     }
 
-    if (sanitized[@"required"] && (!sanitized[@"properties"] || [sanitized[@"properties"] count] == 0)) {
-        [sanitized removeObjectForKey:@"required"];
+    if (sanitizedProps.count > 0) {
+        sanitized[@"properties"] = sanitizedProps;
+    }
+
+    // Infer type if missing
+    if (!sanitized[@"type"]) {
+        if (sanitizedProps.count > 0 || dict[@"properties"]) {
+            sanitized[@"type"] = @"object";
+        } else if (dict[@"items"]) {
+            sanitized[@"type"] = @"array";
+        }
+    }
+
+    // 3. Handle "required"
+    // Gemini API requires all properties in "required" to exist in "properties".
+    NSMutableSet<NSString *> *requiredKeys = [NSMutableSet set];
+    id reqObj = dict[@"required"];
+    if ([reqObj isKindOfClass:[NSArray class]]) {
+        for (id r in (NSArray *)reqObj) {
+            if ([r isKindOfClass:[NSString class]]) {
+                [requiredKeys addObject:r];
+            }
+        }
+    }
+    if ([allOfObj isKindOfClass:[NSArray class]]) {
+        for (id subItem in (NSArray *)allOfObj) {
+            if ([subItem isKindOfClass:[NSDictionary class]]) {
+                id subReq = subItem[@"required"];
+                if ([subReq isKindOfClass:[NSArray class]]) {
+                    for (id r in (NSArray *)subReq) {
+                        if ([r isKindOfClass:[NSString class]]) {
+                            [requiredKeys addObject:r];
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (sanitizedProps.count > 0 && requiredKeys.count > 0) {
+        NSMutableArray<NSString *> *validRequired = [NSMutableArray array];
+        for (NSString *key in requiredKeys) {
+            if (sanitizedProps[key]) {
+                [validRequired addObject:key];
+            }
+        }
+        if (validRequired.count > 0) {
+            sanitized[@"required"] = validRequired;
+        }
+    }
+
+    // 4. Handle "items"
+    id itemsObj = dict[@"items"];
+    if (itemsObj) {
+        id sanitizedItems = DPBYOKSanitizeGeminiSchemaInternal(itemsObj, rootSchema, visitedRefs);
+        if (sanitizedItems) {
+            sanitized[@"items"] = sanitizedItems;
+        }
+    }
+
+    // 5. Handle "minimum" & "exclusiveMinimum"
+    id minVal = dict[@"minimum"];
+    if ([minVal isKindOfClass:[NSNumber class]] && !DPBYOKIsCFBoolean(minVal)) {
+        sanitized[@"minimum"] = minVal;
+    }
+    id excMinVal = dict[@"exclusiveMinimum"];
+    if (excMinVal && !sanitized[@"minimum"] && [excMinVal isKindOfClass:[NSNumber class]] && !DPBYOKIsCFBoolean(excMinVal)) {
+        sanitized[@"minimum"] = excMinVal;
+    }
+
+    // 6. Handle "maximum" & "exclusiveMaximum"
+    id maxVal = dict[@"maximum"];
+    if ([maxVal isKindOfClass:[NSNumber class]] && !DPBYOKIsCFBoolean(maxVal)) {
+        sanitized[@"maximum"] = maxVal;
+    }
+    id excMaxVal = dict[@"exclusiveMaximum"];
+    if (excMaxVal && !sanitized[@"maximum"] && [excMaxVal isKindOfClass:[NSNumber class]] && !DPBYOKIsCFBoolean(excMaxVal)) {
+        sanitized[@"maximum"] = excMaxVal;
+    }
+
+    // 7. Handle "enum" and "const"
+    id enumObj = dict[@"enum"];
+    if ([enumObj isKindOfClass:[NSArray class]]) {
+        NSMutableArray<NSString *> *enumStrs = [NSMutableArray arrayWithCapacity:[enumObj count]];
+        for (id e in (NSArray *)enumObj) {
+            if ([e isKindOfClass:[NSString class]]) {
+                [enumStrs addObject:e];
+            } else if ([e respondsToSelector:@selector(stringValue)]) {
+                [enumStrs addObject:[e stringValue]];
+            } else if (e && e != [NSNull null]) {
+                [enumStrs addObject:[e description]];
+            }
+        }
+        if (enumStrs.count > 0) {
+            sanitized[@"enum"] = enumStrs;
+        }
+    } else if (dict[@"const"] && dict[@"const"] != [NSNull null]) {
+        id constVal = dict[@"const"];
+        NSString *constStr = [constVal isKindOfClass:[NSString class]] ? constVal : [constVal description];
+        if (constStr.length > 0) {
+            sanitized[@"enum"] = @[constStr];
+        }
+    }
+
+    // 8. Handle "anyOf" and "oneOf"
+    id anyOfObj = dict[@"anyOf"];
+    if ([anyOfObj isKindOfClass:[NSArray class]]) {
+        sanitized[@"anyOf"] = DPBYOKSanitizeGeminiSchemaInternal(anyOfObj, rootSchema, visitedRefs);
+    } else {
+        id oneOfObj = dict[@"oneOf"];
+        if ([oneOfObj isKindOfClass:[NSArray class]]) {
+            sanitized[@"anyOf"] = DPBYOKSanitizeGeminiSchemaInternal(oneOfObj, rootSchema, visitedRefs);
+        }
+    }
+
+    // 9. Other strictly supported Gemini Schema fields (allowlist only)
+    if ([dict[@"description"] isKindOfClass:[NSString class]]) {
+        sanitized[@"description"] = dict[@"description"];
+    }
+    if ([dict[@"format"] isKindOfClass:[NSString class]]) {
+        sanitized[@"format"] = dict[@"format"];
+    }
+    if ([dict[@"pattern"] isKindOfClass:[NSString class]]) {
+        sanitized[@"pattern"] = dict[@"pattern"];
+    }
+    if ([dict[@"minLength"] isKindOfClass:[NSNumber class]]) {
+        sanitized[@"minLength"] = dict[@"minLength"];
+    }
+    if ([dict[@"maxLength"] isKindOfClass:[NSNumber class]]) {
+        sanitized[@"maxLength"] = dict[@"maxLength"];
+    }
+    if ([dict[@"minItems"] isKindOfClass:[NSNumber class]]) {
+        sanitized[@"minItems"] = dict[@"minItems"];
+    }
+    if ([dict[@"maxItems"] isKindOfClass:[NSNumber class]]) {
+        sanitized[@"maxItems"] = dict[@"maxItems"];
+    }
+    if ([dict[@"minProperties"] isKindOfClass:[NSNumber class]]) {
+        sanitized[@"minProperties"] = dict[@"minProperties"];
+    }
+    if ([dict[@"maxProperties"] isKindOfClass:[NSNumber class]]) {
+        sanitized[@"maxProperties"] = dict[@"maxProperties"];
+    }
+    if ([dict[@"propertyOrdering"] isKindOfClass:[NSArray class]]) {
+        sanitized[@"propertyOrdering"] = dict[@"propertyOrdering"];
     }
 
     return sanitized;
+}
+
+id DPBYOKSanitizeGeminiSchema(id schema) {
+    NSDictionary *root = [schema isKindOfClass:[NSDictionary class]] ? (NSDictionary *)schema : nil;
+    NSMutableSet<NSString *> *visited = [NSMutableSet set];
+    id result = DPBYOKSanitizeGeminiSchemaInternal(schema, root, visited);
+    if ([result isKindOfClass:[NSMutableDictionary class]]) {
+        [(NSMutableDictionary *)result removeObjectForKey:@"$defs"];
+        [(NSMutableDictionary *)result removeObjectForKey:@"definitions"];
+    }
+    return result;
 }
 
 #pragma mark - Gemini Stream Delegate
@@ -153,7 +345,7 @@ typedef NS_ENUM(NSInteger, DPBYOKBlockType) {
 @property (nonatomic, copy) NSString *modelId;
 @property (nonatomic, assign) NSInteger statusCode;
 @property (nonatomic, strong) NSMutableData *accumulatedErrorData;
-@property (nonatomic, strong) NSMutableString *lineBuffer;
+@property (nonatomic, strong) NSMutableData *byteBuffer;
 @property (nonatomic, assign) BOOL finished;
 @property (nonatomic, assign) BOOL messageStartEmitted;
 @property (nonatomic, assign) NSInteger currentBlockIndex;
@@ -172,7 +364,7 @@ typedef NS_ENUM(NSInteger, DPBYOKBlockType) {
         _modelId = [modelId copy];
         _callback = [callback copy];
         _accumulatedErrorData = [NSMutableData data];
-        _lineBuffer = [NSMutableString string];
+        _byteBuffer = [NSMutableData data];
         _currentBlockIndex = 0;
         _openBlockType = DPBYOKBlockTypeNone;
         _toolCounter = 0;
@@ -530,26 +722,32 @@ typedef NS_ENUM(NSInteger, DPBYOKBlockType) {
     }
 }
 
-- (void)processLineBuffer {
-    NSMutableArray<NSString *> *linesToProcess = [NSMutableArray array];
-    @synchronized (self) {
-        NSRange range = [self.lineBuffer rangeOfString:@"\n"];
-        while (range.location != NSNotFound) {
-            NSString *line = [self.lineBuffer substringToIndex:range.location];
-            [self.lineBuffer deleteCharactersInRange:NSMakeRange(0, range.location + 1)];
-            [linesToProcess addObject:line];
-            range = [self.lineBuffer rangeOfString:@"\n"];
-        }
+- (void)processSSELine:(NSString *)rawLine {
+    NSString *line = [rawLine stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"\r"]];
+    if ([line hasPrefix:@"data: "]) {
+        NSString *jsonStr = [line substringFromIndex:6];
+        [self processJSONString:jsonStr];
+    } else if ([line hasPrefix:@"data:"]) {
+        NSString *jsonStr = [line substringFromIndex:5];
+        [self processJSONString:jsonStr];
     }
+}
 
-    for (NSString *rawLine in linesToProcess) {
-        NSString *line = [rawLine stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"\r"]];
-        if ([line hasPrefix:@"data: "]) {
-            NSString *jsonStr = [line substringFromIndex:6];
-            [self processJSONString:jsonStr];
-        } else if ([line hasPrefix:@"data:"]) {
-            NSString *jsonStr = [line substringFromIndex:5];
-            [self processJSONString:jsonStr];
+- (void)processByteBuffer {
+    while (self.byteBuffer.length > 0) {
+        if (self.finished) return;
+        const uint8_t *bytes = (const uint8_t *)self.byteBuffer.bytes;
+        NSUInteger len = self.byteBuffer.length;
+        const void *nl = memchr(bytes, '\n', len);
+        if (!nl) break;
+
+        NSUInteger lineLen = (const uint8_t *)nl - bytes;
+        NSData *lineData = [self.byteBuffer subdataWithRange:NSMakeRange(0, lineLen)];
+        [self.byteBuffer replaceBytesInRange:NSMakeRange(0, lineLen + 1) withBytes:NULL length:0];
+
+        NSString *line = [[NSString alloc] initWithData:lineData encoding:NSUTF8StringEncoding];
+        if (line) {
+            [self processSSELine:line];
         }
     }
 }
@@ -573,16 +771,10 @@ didReceiveResponse:(NSURLResponse *)response
             [self.accumulatedErrorData appendData:data];
             return;
         }
+
+        [self.byteBuffer appendData:data];
+        [self processByteBuffer];
     }
-
-    NSString *chunkStr = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    if (!chunkStr || chunkStr.length == 0) return;
-
-    @synchronized (self) {
-        [self.lineBuffer appendString:chunkStr];
-    }
-
-    [self processLineBuffer];
 }
 
 - (void)URLSession:(NSURLSession *)session
@@ -629,23 +821,12 @@ didCompleteWithError:(NSError *)error {
         return;
     }
 
-    NSString *remaining = nil;
-    @synchronized (self) {
-        if (self.lineBuffer.length > 0) {
-            remaining = [self.lineBuffer copy];
-            [self.lineBuffer setString:@""];
+    if (self.byteBuffer.length > 0) {
+        NSString *remaining = [[NSString alloc] initWithData:self.byteBuffer encoding:NSUTF8StringEncoding];
+        if (remaining && remaining.length > 0) {
+            [self processSSELine:remaining];
         }
-    }
-    if (remaining.length > 0) {
-        NSArray<NSString *> *lines = [remaining componentsSeparatedByString:@"\n"];
-        for (NSString *rawLine in lines) {
-            NSString *line = [rawLine stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"\r"]];
-            if ([line hasPrefix:@"data: "]) {
-                [self processJSONString:[line substringFromIndex:6]];
-            } else if ([line hasPrefix:@"data:"]) {
-                [self processJSONString:[line substringFromIndex:5]];
-            }
-        }
+        [self.byteBuffer setLength:0];
     }
 
     [self finishStream];
@@ -720,7 +901,15 @@ void DPBYOKExecuteGeminiRequest(NSDictionary *anthropicBody, NSString *apiKey, N
             }
             id inputSchema = toolItem[@"input_schema"];
             if ([inputSchema isKindOfClass:[NSDictionary class]]) {
-                decl[@"parameters"] = DPBYOKSanitizeGeminiSchema(inputSchema);
+                NSMutableDictionary *sanitizedParams = [DPBYOKSanitizeGeminiSchema(inputSchema) mutableCopy];
+                if ([sanitizedParams isKindOfClass:[NSMutableDictionary class]]) {
+                    if (!sanitizedParams[@"type"]) {
+                        sanitizedParams[@"type"] = @"object";
+                    }
+                    [sanitizedParams removeObjectForKey:@"$defs"];
+                    [sanitizedParams removeObjectForKey:@"definitions"];
+                    decl[@"parameters"] = sanitizedParams;
+                }
             }
             [declarations addObject:decl];
         }
@@ -942,7 +1131,10 @@ void DPBYOKExecuteGeminiRequest(NSDictionary *anthropicBody, NSString *apiKey, N
 
     // 4. Generation Config & Thinking Config
     NSMutableDictionary *genConfig = [NSMutableDictionary dictionary];
-    genConfig[@"maxOutputTokens"] = anthropicBody[@"max_tokens"] ?: @8192;
+    NSInteger requestedTokens = [anthropicBody[@"max_tokens"] integerValue];
+    if (requestedTokens <= 0) requestedTokens = 8192;
+    NSInteger flooredTokens = MAX(16, MIN(65536, requestedTokens));
+    genConfig[@"maxOutputTokens"] = @(flooredTokens);
 
     if (anthropicBody[@"temperature"]) {
         genConfig[@"temperature"] = anthropicBody[@"temperature"];
@@ -967,7 +1159,7 @@ void DPBYOKExecuteGeminiRequest(NSDictionary *anthropicBody, NSString *apiKey, N
     if (hasThinkingSupport && thinkingLevel.length > 0) {
         NSString *lowerLevel = [thinkingLevel lowercaseString];
 
-        if ([lowerModelId containsString:@"gemini-3"]) {
+        if ([lowerModelId containsString:@"gemini-3"] || [lowerModelId hasPrefix:@"gemini-3"]) {
             if ([lowerLevel isEqualToString:@"off"]) {
                 genConfig[@"thinkingConfig"] = @{@"thinkingLevel": @"MINIMAL"};
             } else {
