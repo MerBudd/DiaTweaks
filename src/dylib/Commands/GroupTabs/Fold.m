@@ -2,6 +2,8 @@
 #import "GroupTabs.h"
 #import <objc/message.h>
 
+CFTimeInterval DPFoldedAt;
+
 static id DPFoldProperties(BOOL collapsed) {
     Class cls = objc_getClass(DPDiaTabGroupProperties);
     id props = cls ? [cls new] : nil;
@@ -16,6 +18,7 @@ static void DPFoldNext(id delegate, id browser, NSArray<NSString *> *ids, NSUInt
     id props = DPFoldProperties(collapsed);
     if (!props) return;
     void (*update)(id, SEL, id, NSString *, id, void (^)(id)) = (void *)objc_msgSend;
+    if (collapsed) DPFoldedAt = CACurrentMediaTime();
     update(delegate, @selector(browser:updateTabGroupWithId:properties:completion:), browser, ids[index], props, ^(id _) {
         dispatch_async(dispatch_get_main_queue(), ^{ DPFoldNext(delegate, browser, ids, index + 1, collapsed); });
     });

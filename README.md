@@ -55,7 +55,7 @@ Tweak names work as keys or titles, like `hideToolbar` or `"Hide Toolbar"`, and 
 
 ## Updating
 
-Dia's own updater is switched off. **Settings → Home → Software Update** checks for a new Dia and a new DiaTweaks release, downloads either one, and relaunches Dia to install it, like macOS's Software Update. Under **Automatic Updates**, pick for each of Dia and DiaTweaks: off, just show updates, download them, or download and install them when you quit (the default).
+Dia's own updater is switched off. **Settings → Home → Software Update** checks for a new Dia and a new DiaTweaks release, downloads either one, and relaunches Dia to install it, like macOS's Software Update. Under **Automatic Updates**, pick for each of Dia and DiaTweaks: off, just show updates, download them, or download and install them when you quit (the default). A DiaTweaks you built from source with `install.sh` is never downloaded or replaced automatically: **Update Now** or `diatweaks update` installs the latest release, and automatic updates apply from then on.
 
 - **Dia now:** `diatweaks update-dia`
 - **DiaTweaks now:** `diatweaks update`

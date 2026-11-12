@@ -15,4 +15,23 @@ id DPScriptTab(NSWindow *window, NSString *tabID) {
 NSString *DPTabID(id tab) { return [tab valueForKey:@"tabId"]; }
 NSString *DPActiveTabID(NSWindow *window) { return DPTabID([DPScriptWindow(window) valueForKey:@"activeTab"]); }
 void DPFocusTab(id tab) { [tab performSelector:@selector(focus:) withObject:nil]; }
-void DPCloseTab(id tab) { [tab performSelector:@selector(close:) withObject:nil]; }
+static NSInteger DPOwnCloses;
+static CFTimeInterval DPOwnClosesLapse;
+
+void DPMarkOwnClose(void) {
+    DPOwnCloses++;
+    DPOwnClosesLapse = CACurrentMediaTime() + 1;
+}
+
+BOOL DPTakeOwnClose(void) {
+    if (CACurrentMediaTime() > DPOwnClosesLapse) DPOwnCloses = 0;
+    if (DPOwnCloses <= 0) return NO;
+    DPOwnCloses--;
+    return YES;
+}
+
+void DPCloseTab(id tab) {
+    if (!tab) return;
+    DPMarkOwnClose();
+    [tab performSelector:@selector(close:) withObject:nil];
+}

@@ -60,19 +60,41 @@ static void DPBrowser_takeOwnership(id self, SEL _cmd, id contents) {
 
 NSWindow *DPBrowserWindow(id browser) { return [DPWindowByBrowser objectForKey:browser]; }
 
-id DPBrowserOfWindow(NSWindow *window) {
-    for (id browser in DPBrowsers.allObjects)
-        if (window && [DPWindowByBrowser objectForKey:browser] == window) return browser;
-    return nil;
+// A profile by its folder in Dia's user data, which both a browser's context and Dia's window name it by.
+static NSString *DPBrowserProfile(id browser) {
+    id context = [browser respondsToSelector:@selector(context)] ? DPMsg(browser, @selector(context)) : nil;
+    id contextID = [context respondsToSelector:@selector(id)] ? DPMsg(context, @selector(id)) : nil;
+    return [contextID respondsToSelector:@selector(directoryBasename)] ? DPText(DPMsg(contextID, @selector(directoryBasename))) : nil;
 }
+
+static NSString *DPFocusedProfile(NSWindow *window) {
+    id controller = DPSwiftValue(DPSwiftValue(window.windowController, @"viewModel"), @"delegate");
+    id focused = DPSwiftValue(controller, @"committedFocusedBrowserContextID");
+    return DPText(DPSwiftValue(DPSwiftValue(focused, @"profileID"), @"directoryBasename"));
+}
+
+// A window keeps a browser for each profile it has shown. This is the one for the profile in front, else any of them.
+static id DPFrontBrowser(NSWindow *window, NSArray *browsers) {
+    NSMutableArray *shown = [NSMutableArray new];
+    for (id browser in browsers)
+        if (window && [DPWindowByBrowser objectForKey:browser] == window) [shown addObject:browser];
+    if (shown.count < 2) return shown.firstObject;
+    NSString *focused = DPFocusedProfile(window);
+    for (id browser in shown)
+        if ([DPBrowserProfile(browser) isEqual:focused]) return browser;
+    return shown.firstObject;
+}
+
+id DPBrowserOfWindow(NSWindow *window) { return DPFrontBrowser(window, DPBrowsers.allObjects); }
 
 id DPCommandBrowser(void) {
     NSMutableArray *ready = [NSMutableArray new];
     for (id browser in DPBrowsers.allObjects)
         if ([[DPDelegateByBrowser objectForKey:browser] respondsToSelector:@selector(browser:getAllTabGroupsWithCompletion:)]) [ready addObject:browser];
-    for (NSWindow *window in NSApp.orderedWindows)
-        for (id browser in ready)
-            if ([DPWindowByBrowser objectForKey:browser] == window) return browser;
+    for (NSWindow *window in NSApp.orderedWindows) {
+        id browser = DPFrontBrowser(window, ready);
+        if (browser) return browser;
+    }
     return ready.count == 1 ? ready[0] : nil;
 }
 

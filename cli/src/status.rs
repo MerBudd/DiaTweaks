@@ -44,7 +44,8 @@ fn report(env: &Env, spinner: &Spinner) -> Result<Vec<String>> {
     let safe_mode = match dia::safe_mode(&env.support) {
         0 => "off",
         1 => "on: tweaks are off because Dia quit unexpectedly right after opening",
-        _ => "on: DiaTweaks is off because Dia kept quitting right after opening",
+        _ if dia::safe_mode_parked(&env.support) => "on: DiaTweaks is off because Dia kept quitting right after opening, even after it was tried again; it stays off until the next DiaTweaks update",
+        _ => "on: DiaTweaks is off because Dia kept quitting right after opening; it comes back with tweaks off after one launch where Dia stays open for three minutes or quits normally",
     };
     let mut lines = vec![
         format!("Dia        {installed}"),

@@ -80,7 +80,10 @@ static BOOL DPTakeEvent(NSEvent *event) {
     if (event.type == NSEventTypeFlagsChanged) return event.keyCode == 54 || event.keyCode == 55;
     // ⇧ may still be down from cycling backward, and ⌘⇧W would close the window.
     NSEventModifierFlags mods = event.modifierFlags & (NSEventModifierFlagCommand | NSEventModifierFlagOption);
-    return (mods == NSEventModifierFlagCommand || !mods) && [event.charactersIgnoringModifiers.lowercaseString isEqualToString:@"w"] && DPCloseFocusedTab(switcher);
+    // A layout with no Latin letters (Russian, Greek) is matched by the W key's position. Others by the letter, so Dvorak's W still works.
+    NSString *typed = event.charactersIgnoringModifiers.lowercaseString;
+    BOOL isW = (typed.length && [typed characterAtIndex:0] > 0x7f) ? event.keyCode == 13 : [typed isEqualToString:@"w"];
+    return (mods == NSEventModifierFlagCommand || !mods) && isW && DPCloseFocusedTab(switcher);
 }
 
 // Every event comes through here, before the switcher's own key handling can take it.

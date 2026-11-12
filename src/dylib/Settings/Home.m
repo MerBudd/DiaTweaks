@@ -54,6 +54,7 @@ static NSView *DPWebRow(NSString *title, NSString *path) {
     _updateSummary.stringValue = staged ? @"Ready to install"
         : available ? [NSString stringWithFormat:@"%lu update%@", available, available == 1 ? @"" : @"s"]
         : updates.checking ? @"Checking…"
+        : updates.checkProblem ? @"Couldn’t check"
         : updates.found ? @"Up to date" : @"";
 
     id installed = updates.found[DPTweaks][@"installed"];

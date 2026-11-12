@@ -1,5 +1,6 @@
 #import "StdPatch/StdPatch.h"
 #import "Patches/CommandBar/Tabs.h"
+#import "Patches/CompactCommandBar/CompactCommandBar.h"
 
 extern DPPatch DPCommandBar, DPCommandBarBlur, DPCommandBarDarken, DPCommandBarShadow, DPCommandBarInteractive, DPCommandBarKeepText;
 static char DPOverlayKey, DPHomeKey, DPRecentKey, DPBlankKey, DPSplitKey, DPOwnBarKey, DPLeftTextKey, DPClosedAtKey;
@@ -50,11 +51,12 @@ static NSMenuItem *DPMenuItemTitled(NSMenu *menu, NSString *title) {
     return nil;
 }
 
+static const NSEventModifierFlags DPShortcutMods = NSEventModifierFlagCommand | NSEventModifierFlagShift | NSEventModifierFlagOption | NSEventModifierFlagControl;
+
 static BOOL DPIsShortcut(NSEvent *event, NSString *menuTitle) {
     if (event.type != NSEventTypeKeyDown && event.type != NSEventTypeKeyUp) return NO;
     NSMenuItem *item = DPMenuItemTitled(NSApp.mainMenu, menuTitle);
-    NSEventModifierFlags mods = NSEventModifierFlagCommand | NSEventModifierFlagShift | NSEventModifierFlagOption | NSEventModifierFlagControl;
-    return item.keyEquivalent.length && (event.modifierFlags & mods) == item.keyEquivalentModifierMask
+    return item.keyEquivalent.length && (event.modifierFlags & DPShortcutMods) == item.keyEquivalentModifierMask
         && [event.charactersIgnoringModifiers caseInsensitiveCompare:item.keyEquivalent] == NSOrderedSame;
 }
 
@@ -306,7 +308,9 @@ static void DPCancelCommandBar(DPCommandBarOverlay *overlay) {
     BOOL overBlank = overlay.overBlank;
     if (DPIsKind(page, DPDiaPopover)) [DPBarText(overlay) doCommandBySelector:@selector(cancelOperation:)];
     else if (DPCommandBarKeepText.on) DPSet(overlay.host, &DPLeftTextKey, DPBarText(overlay).string.copy);
-    BOOL nowhereToGo = !overlay.returnTab;
+    // A return tab that has since closed leaves nowhere to go once the new tab is all that's left.
+    NSWindow *host = overlay.host;
+    BOOL nowhereToGo = !overlay.returnTab || (!DPScriptTab(host, DPTabID(overlay.returnTab)) && [[DPScriptWindow(host) valueForKey:@"appleScriptTabs"] count] < 2);
     id tab = DPDismissCommandBar(overlay);
     if (!tab) return;
     // Closing a window's only tab would close the window, and Dia with it.
@@ -331,6 +335,11 @@ static void DPWatchNewTab(DPCommandBarOverlay *overlay) {
         DPDismissCommandBar(overlay);
         return DPCloseTab(tab);
     }
+    // The tab the bar was opened over closed, so its own bar is shown rather than a second one over it.
+    if (overlay.returnTab && !DPScriptTab(window, DPTabID(overlay.returnTab))) {
+        DPDismissCommandBar(overlay);
+        return DPFocusTab(tab);
+    }
     // A chat loads no page; Dia empties the bar once it has taken what was typed.
     BOOL taken = overlay.picked && !DPBarText(overlay).string.length;
     NSString *url = [tab valueForKey:@"URL"];
@@ -349,26 +358,31 @@ static void DPWatchSoon(DPCommandBarOverlay *overlay, int checks) {
         });
 }
 
+// Only a click on a suggestion or Go can submit what's typed; one in the text, to move the caret, can't.
+static BOOL DPClickSubmits(DPCommandBarOverlay *overlay, NSEvent *event) {
+    NSView *hit = [overlay hitTest:[overlay.superview convertPoint:event.locationInWindow fromView:nil]];
+    NSView *suggestions = DPCommandBarPart(overlay.panel, DPDiaCommandBarSuggestions), *go = DPGoButton(DPCommandBarPart(overlay.panel, DPDiaCommandBarToolbar));
+    return (suggestions && [hit isDescendantOf:suggestions]) || (go && [hit isDescendantOf:go]);
+}
+
 static id DPWatchKeys(DPCommandBarOverlay *overlay) {
     __weak DPCommandBarOverlay *weak = overlay;
-    return [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown | NSEventMaskLeftMouseDown | NSEventMaskLeftMouseUp handler:^NSEvent *(NSEvent *event) {
+    return [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown | NSEventMaskLeftMouseUp handler:^NSEvent *(NSEvent *event) {
         DPCommandBarOverlay *overlay = weak;
         if (!overlay || event.window != overlay.host) return event;
-        // The page is under the bar, so a click closes it first and then lands on the page.
-        if (event.type == NSEventTypeLeftMouseDown) {
-            NSRect bar = [overlay.panel convertRect:overlay.panel.bounds toView:nil];
-            if (DPCommandBarInteractive.on && !NSMouseInRect(event.locationInWindow, bar, NO)) DPCancelCommandBar(overlay);
-            return event;
-        }
-        if (event.type == NSEventTypeLeftMouseUp || event.keyCode == 36 || event.keyCode == 76) {
-            overlay.picked = overlay.picked || DPBarText(overlay).string.length > 0;
+        BOOL click = event.type == NSEventTypeLeftMouseUp;
+        if (click || event.keyCode == 36 || event.keyCode == 76) {
+            BOOL submits = click ? DPClickSubmits(overlay, event) : !DPBarText(overlay).hasMarkedText;  // Return can confirm an input method's text.
+            overlay.picked = overlay.picked || (submits && DPBarText(overlay).string.length > 0);
             if (overlay.openedTab) DPWatchSoon(overlay, 60);
             return event;
         }
         BOOL escape = event.keyCode == 53;
-        BOOL close = (event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask) == NSEventModifierFlagCommand
-                     && [event.charactersIgnoringModifiers isEqualToString:@"w"];
+        // Caps Lock sets a modifier bit and capitalises the character; ⌘W stands in if the menu has no Close Tab.
+        BOOL close = DPMenuItemTitled(NSApp.mainMenu, @"Close Tab") ? DPIsShortcut(event, @"Close Tab")
+                                                                       : (event.modifierFlags & DPShortcutMods) == NSEventModifierFlagCommand && event.keyCode == 13;
         if (!escape && !close) return event;
+        if (escape && DPBarText(overlay).hasMarkedText) return event;  // It cancels an input method's composition first.
         NSRect bar = [overlay.host convertRectToScreen:[overlay.panel convertRect:overlay.panel.bounds toView:nil]];
         for (NSWindow *child in overlay.host.childWindows)  // The @ menu, which Escape closes first.
             if (escape && child.visible && NSIntersectsRect(child.frame, bar)) return event;
@@ -418,6 +432,7 @@ static CGFloat DPStyleAsNewTab(NSView *panel) {
     *top = 21;
     bar.needsLayout = YES;  // So a tweak measuring it while the panel sizes sees it styled.
     [bar layoutSubtreeIfNeeded];
+    [text scrollRangeToVisible:text.selectedRange];  // The layout scrolls a long URL back to its start.
     return grown;
 }
 
@@ -544,6 +559,7 @@ static void DPCapability_mouseDown(NSView *self, SEL _cmd, NSEvent *event) {
 }
 
 static void DPNewTabButton_mouseDown(NSView *self, SEL _cmd, NSEvent *event) {
+    DPSet(self.window, &DPClosedAtKey, nil);  // As in DPCommandBarKey.
     if (!DPOpenOverBlank(self.window)) DPCallOriginal(DPNewTabButton_mouseDown, self, event);
 }
 
@@ -552,6 +568,7 @@ static NSEvent *DPCommandBarKey(NSEvent *event) {
     if (!DPCommandBar.on || !window) return event;
     if (DPIsShortcut(event, @"Close Tab")) DPSet(window, &DPClosedAtKey, @(event.timestamp));
     if (!(DPIsShortcut(event, @"New Tab") || DPIsShortcut(event, @"Open Command Bar"))) return event;
+    DPSet(window, &DPClosedAtKey, nil);  // Closing a tab that wasn't the last leaves the stamp unread, which would hide this new tab as a blank.
     DPCommandBarOverlay *overlay = DPGet(window, &DPOverlayKey);
     if (overlay) DPFocusBar(overlay);
     return overlay || DPOpenOverBlank(window) ? nil : event;
@@ -866,7 +883,7 @@ DP_PATCH(DPCommandBarInteractive) {
     .defaultOn = YES,
     .order = 91,
     .title = @"Scroll Page Behind",
-    .detail = @"Scroll the page behind the command bar while it's open, like Arc. The pointer doesn't highlight it; clicking closes the bar and acts on the page.",
+    .detail = @"Scroll the page behind the command bar while it's open, like Arc. The pointer doesn't highlight it, and clicking outside closes the bar without clicking the page.",
     .symbol = @"cursorarrow.rays",
     .tint = @"systemOrangeColor",
     .requires = @"commandBar",

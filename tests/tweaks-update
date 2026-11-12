@@ -43,7 +43,12 @@ check "source build with a malformed commit" true "not-a-commit"
 printf '<plist><dict><key>digest</key><string>sha256:old</string><key>tag</key><string>v1.0.0</string></dict></plist>' > "$temporary/home/release.plist"
 check "release install, newer release" true "$newer"
 printf '<plist><dict><key>digest</key><string>sha256:aaaa</string><key>tag</key><string>v2.0.0</string></dict></plist>' > "$temporary/home/release.plist"
+mkdir -p "$temporary/home/bin" "$temporary/home/app-icons"
+touch "$temporary/home/bin/diapatch" "$temporary/home/bin/diatweaks" "$temporary/home/DiaPatches.dylib" "$temporary/home/patches.json"
 check "release install, same release" false "$older"
+# An older updater installs only the files it knows about, as v1.1.0 did with app-icons.
+rmdir "$temporary/home/app-icons"
+check "release install, same release missing a file" true "$older"
 
 # self-update says why it staged nothing.
 rm -f "$temporary/home/release.plist"

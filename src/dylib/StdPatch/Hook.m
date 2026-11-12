@@ -30,3 +30,9 @@ IMP DPOriginalIMP(id object, SEL sel, IMP replacement) {
             if (DPHooks[i].cls == c && DPHooks[i].sel == sel && DPHooks[i].replacement == replacement) return DPHooks[i].original;
     abort();
 }
+
+IMP DPDiaIMP(Class cls, SEL sel) {
+    for (size_t i = 0; i < DPHookCount; i++)
+        if (DPHooks[i].cls == cls && DPHooks[i].sel == sel) return DPHooks[i].original;
+    return class_getMethodImplementation(cls, sel);
+}

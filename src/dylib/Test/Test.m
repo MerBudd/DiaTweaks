@@ -50,6 +50,8 @@ void DPRunTests(NSString *path) {
             NSMutableArray<NSArray<NSString *> *> *scenarios = DPScenarios();
             int8_t saved[DPPatchCount];
             for (NSUInteger i = 0; i < DPPatchCount; i++) saved[i] = DPSavedOn(DPPatches[i]);
+            // First, before any scenario switches anything, so a patch that nothing applies at launch fails here.
+            [scenarios insertObject:@[@"at launch", DPBits(saved)] atIndex:0];
             [scenarios addObject:@[@"saved settings", DPBits(saved)]];
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
                 DPRunScenario(scenarios, 0, [NSMutableArray new], path);

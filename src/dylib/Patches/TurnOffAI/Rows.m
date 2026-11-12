@@ -15,9 +15,12 @@ static BOOL DPFoldsRows(NSTableView *table) {
 }
 
 static BOOL DPIsAIRowView(NSTableView *table, NSView *row) {
-    BOOL sidebar = DPIsKind(table.delegate, DPDiaSettingsSidebar);
+    BOOL sidebar = DPIsKind(table.delegate, DPDiaSettingsSidebar), suggestions = DPIsKind(table.delegate, DPDiaSuggestionsView);
     return DPFindView(row, ^BOOL(NSView *view) {
         if ([view isKindOfClass:NSImageView.class]) return [view.accessibilityLabel isEqual:@"chat"];
+        // A suggestion's text is what was typed or a page's title, which can start with "Chat with" too. Only the icon
+        // says the row is Dia's chat.
+        if (suggestions) return NO;
         NSString *text = [view isKindOfClass:NSTextField.class] ? [(NSTextField *)view stringValue] : view.accessibilityLabel;
         if (sidebar) return [text isEqual:@"Apps"] || [text isEqual:@"Skills"];
         return DPIsAITitle(text);

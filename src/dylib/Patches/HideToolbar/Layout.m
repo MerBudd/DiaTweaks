@@ -37,8 +37,14 @@ static BOOL DPShowsNewTab(NSView *pane) {
     return NO;
 }
 
+// Only the sidebar layout has a footer, even with the sidebar hidden.
+static BOOL DPTabsAtTop(NSView *pane) {
+    return pane.window && !DPFindView(pane.window.contentView, ^BOOL(NSView *view) { return DPIsKind(view, DPDiaSidebarFooter); });
+}
+
 BOOL DPKeptInPlace(NSView *pane) {
-    return (DPShowToolbarWithSidebar.on && DPSidebarDocked(pane)) || (DPShowToolbarOnNewTab.on && DPShowsNewTab(pane));
+    return (DPShowToolbarWithSidebar.on && DPSidebarDocked(pane)) || (DPShowToolbarOnNewTab.on && DPShowsNewTab(pane)) ||
+           (DPShowToolbarWithTopTabs.on && DPTabsAtTop(pane));
 }
 
 NSString *DPVerifyKeptInPlace(DPPatch *patch) {

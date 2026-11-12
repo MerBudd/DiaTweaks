@@ -40,7 +40,7 @@ static void DPSettingsHeader_layout(NSView *self, SEL _cmd) {
     NSTextField *title = (NSTextField *)DPFindView(self, ^BOOL(NSView *view) { return [view isKindOfClass:NSTextField.class]; });
     if (![title.stringValue isEqual:@"Morning Brief"] || !self.superview) return;
     [DPMorningBriefs addObject:self.superview];
-    self.superview.hidden = DPTurnOffAI.on;
+    if (DPTurnOffAI.on) self.superview.hidden = YES;
 }
 
 #pragma mark Chat sidebar
@@ -170,7 +170,7 @@ static void DPInstallTurnOffAI(void) {
     DPHook(DPDiaChatSidebar, @selector(viewWillLayout), (IMP)DPChatSidebar_viewWillLayout);
     DPInstallAIRows();
     [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *event) {
-        return DPTurnOffAI.on && DPIsAIShortcut(event) ? nil : event;
+        return DPTurnOffAI.on && !DPShortcutRecording() && DPIsAIShortcut(event) ? nil : event;
     }];
     DPOnLaunch(^{ DPTrackMenu(NSApp.mainMenu); });
 }

@@ -101,15 +101,17 @@ static void DPPlace(NSWindow *window, NSString *newID, NSString *fromID, long lo
     NSUInteger fromIndex = [others indexOfObject:fromID];
     if (newIndex == NSNotFound || fromIndex == NSNotFound || newIndex == fromIndex + 1) return DPDoneMoving(window, state);
 
+    // The move also ends when Dia makes no group for the tab, as when it has closed, which DPMoveTab reports as a failure.
+    void (^finish)(void) = ^{ DPDoneMoving(window, state); };
     // Nothing reports where the unpinned tabs start, but a tab moved to 0 lands there.
     DPMoveTab(delegate, browser, sid, 0, ^{
         NSUInteger start = [DPTabIDs(window) indexOfObject:newID];
-        if (start == NSNotFound || fromIndex < start) return DPDoneMoving(window, state);
+        if (start == NSNotFound || fromIndex < start) return finish();
         DPAskGroups(delegate, browser, ^(NSArray *groups) {
             NSInteger to = (NSInteger)(fromIndex - start) + 1 + (fromSession > 0 ? DPTabsLeftInFolder(groups, fromSession) : 0);
-            DPMoveTab(delegate, browser, sid, to, ^{ DPDoneMoving(window, state); });
+            DPMoveTab(delegate, browser, sid, to, finish, finish);
         });
-    });
+    }, finish);
 }
 
 // What `make new tab` does. Nothing happens if Dia's scripting isn't as expected, or the tab in front is already a new

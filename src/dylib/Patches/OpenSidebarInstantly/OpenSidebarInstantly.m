@@ -103,6 +103,16 @@ static void DPApplyOpenSidebarInstantly(DPPatch *patch) {
     dispatch_async(dispatch_get_main_queue(), ^{ [NSNotificationCenter.defaultCenter postNotificationName:DPPatchesDidChangeNotification object:nil]; });
 }
 
+// install runs after the saved switches are read, so it also applies the patch at launch. apply handles toggles. A Dia
+// whose code moved stays off and says so, and the saved switch stays on for a release that knows the new code.
+static void DPInstallOpenSidebarInstantly(void) {
+    if (!DPOpenSidebarInstantly.on) return;
+    if (DPLocate()) return DPApplyOpenSidebarInstantly(&DPOpenSidebarInstantly);
+    DPOpenSidebarInstantly.unavailable = YES;
+    DPOpenSidebarInstantly.on = NO;
+    NSLog(@"DiaPatches: Open Sidebar Instantly doesn't know this Dia's sidebar code, so it stays off");
+}
+
 static NSString *DPVerifyOpenSidebarInstantly(DPPatch *patch) {
     if (!patch->on && !DPSite) return nil;
     if (!DPSite) return @"the delay isn't where it was";
@@ -118,6 +128,7 @@ DP_PATCH(DPOpenSidebarInstantly) {
     .symbol = @"arrow.right.to.line.circle.fill arrow.right.to.line",
     .tint = @"systemTealColor",
     .section = @"Sidebar & Tab Bar",
+    .install = DPInstallOpenSidebarInstantly,
     .apply = DPApplyOpenSidebarInstantly,
     .verify = DPVerifyOpenSidebarInstantly,
 };

@@ -22,20 +22,9 @@ NSString *DPLittleDiaURL(NSWindow *window) {
     return [url isKindOfClass:NSURL.class] ? url.absoluteString : @"";
 }
 
-// What was typed as an address: anything with a scheme, or a host like example.com or localhost:3000. Else nil: a search.
-static NSURL *DPTypedURL(NSString *text) {
-    if (!text.length || [text rangeOfCharacterFromSet:NSCharacterSet.whitespaceCharacterSet].location != NSNotFound) return nil;
-    NSURL *url = [NSURL URLWithString:text];
-    NSString *scheme = url.scheme.lowercaseString;
-    if (scheme && ([text containsString:@"://"] || [@[ @"about", @"chrome", @"data", @"mailto" ] containsObject:scheme])) return url;
-    if ([text hasPrefix:@"localhost"]) return [NSURL URLWithString:[@"http://" stringByAppendingString:text]];
-    if ([text containsString:@"."]) return [NSURL URLWithString:[@"https://" stringByAppendingString:text]];
-    return nil;
-}
-
 void DPLittleDiaNavigate(NSWindow *window, NSString *typed) {
     NSString *text = [typed stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    NSURL *url = DPTypedURL(text);
+    NSURL *url = DPAddressURL(text);
     id navigation = DPNavigation(window);
     if (url && [navigation respondsToSelector:@selector(load:initiatorOrigin:)])
         return (void)((id (*)(id, SEL, NSURL *, id))objc_msgSend)(navigation, @selector(load:initiatorOrigin:), url, nil);

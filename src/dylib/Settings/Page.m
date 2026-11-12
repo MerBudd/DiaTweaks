@@ -154,7 +154,7 @@ static NSView *DPWideRow(NSView *view) {
     for (NSView *row in _rows)
         DPFindView(row, ^BOOL(NSView *view) {
             BOOL label = [view isKindOfClass:NSTextField.class] && !((NSTextField *)view).editable;
-            if ([view isKindOfClass:NSControl.class] && !label) ((NSControl *)view).enabled = self->_patch->on;
+            if ([view isKindOfClass:NSControl.class] && !label) ((NSControl *)view).enabled = self->_patch->on && !DPSafeMode;
             return NO;
         });
     // An appearing row fades in once there's room: its group grows from the bottom, so it would ride over the row above.

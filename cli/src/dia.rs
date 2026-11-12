@@ -105,6 +105,14 @@ pub fn safe_mode(support: &Path) -> i64 {
         .unwrap_or(0)
 }
 
+/// Whether level 2 has already stepped down to level 1 once, so it stays until a new build (see SafeMode.m).
+pub fn safe_mode_parked(support: &Path) -> bool {
+    plist::Value::from_file(support.join("safe-mode.plist"))
+        .ok()
+        .and_then(|state| state.as_dictionary()?.get("steppedDown")?.as_boolean())
+        .unwrap_or(false)
+}
+
 fn processes(app: &Path) -> Vec<(libc::pid_t, PathBuf)> {
     let Ok(root) = app.canonicalize() else {
         return Vec::new();

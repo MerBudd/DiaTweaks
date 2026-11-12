@@ -15,8 +15,9 @@ static NSString *const kManifest = @"{\n"
     @"  \"background\": { \"service_worker\": \"worker.js\" }\n"
     @"}\n";
 
-// open: a popup with the link. The others name a popup by its tab's ID, or failing that its URL. search: the words, with
-// the profile's search engine, in that popup. promote: its page becomes a tab in the last normal window, which comes forward.
+// open: a popup with the link, unless `until` has passed: a worker that wakes late finds the link has fallen back to a
+// tab. The others name a popup by its tab's ID, or failing that its URL. search: the words, with the profile's search
+// engine, in that popup. promote: its page becomes a tab in the last normal window, which comes forward.
 static NSString *const kWorker = @"const popupTab = async ({ tabId, url }) => {\n"
     @"  const byId = tabId ? await chrome.tabs.get(tabId).catch(() => null) : null;\n"
     @"  if (byId) return byId;\n"
@@ -26,7 +27,8 @@ static NSString *const kWorker = @"const popupTab = async ({ tabId, url }) => {\
     @"chrome.omnibox.onInputEntered.addListener(async (text) => {\n"
     @"  const request = JSON.parse(text);\n"
     @"  if (request.action === 'open') {\n"
-    @"    const { url, left, top, width, height } = request;\n"
+    @"    const { url, left, top, width, height, until } = request;\n"
+    @"    if (Date.now() > until) return;\n"
     @"    return chrome.windows.create({ url, type: 'popup', focused: true, left, top, width, height });\n"
     @"  }\n"
     @"  const tab = await popupTab(request);\n"
@@ -53,6 +55,8 @@ static NSString *DPExtensionFolder(void) {
 
 static NSString *gExtensionID;  // Set once Chromium has been told to load it.
 static NSError *gWriteError;
+static NSTimeInterval gLoaded;  // When Dia started, as systemUptime.
+static const NSTimeInterval DPLaunchTime = 20;  // Dia is still launching for this long; a link waits less than this for it.
 
 // Chromium names an unpacked extension after its folder: the SHA-256 of the path, its first 32 hex digits spelt a to p.
 static NSString *DPExtensionID(NSString *folder) {
@@ -93,6 +97,7 @@ NSString *DPLittleDiaExtensionProblem(void) {
 }
 
 void DPInstallLittleDiaExtension(void) {
+    gLoaded = NSProcessInfo.processInfo.systemUptime;
     if (!DPWriteLittleDiaExtension(DPLittleDia.on) || !DPLittleDia.on) return;
     DPLoadExtension(DPExtensionFolder());
     gExtensionID = DPExtensionID(DPExtensionFolder());
@@ -103,9 +108,12 @@ static id DPExtensions(id browser) {
     return [context respondsToSelector:@selector(extensions)] ? DPMsg(context, @selector(extensions)) : nil;
 }
 
+// Without a browser it is a launch that has no window yet, but only for a while. Later it is Dia running with every window
+// closed: nothing is on its way, and the link would wait for nothing.
 BOOL DPLittleDiaStarting(void) {
     id extensions = DPExtensions(DPCommandBrowser());
-    return gExtensionID && (!extensions || ([extensions respondsToSelector:@selector(isExtensionSystemReady)] && !DPMsgBool(extensions, @selector(isExtensionSystemReady))));
+    if (!extensions) return gExtensionID && NSProcessInfo.processInfo.systemUptime - gLoaded < DPLaunchTime;
+    return gExtensionID && [extensions respondsToSelector:@selector(isExtensionSystemReady)] && !DPMsgBool(extensions, @selector(isExtensionSystemReady));
 }
 
 // Chromium crashes on input for an extension that isn't loaded and on, as after it's turned off in Extensions.

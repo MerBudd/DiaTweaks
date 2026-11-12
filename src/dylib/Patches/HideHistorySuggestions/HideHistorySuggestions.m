@@ -6,6 +6,9 @@ extern DPPatch DPHideHistorySuggestions;
 static BOOL DPFromHistory(id match) {
     if ([[match valueForKey:@"hasTabMatch"] boolValue]) return NO;
     NSString *provider = [match valueForKey:@"providerType"], *type = [match valueForKey:@"matchType"];
+    // The row for the address as typed is made by the history provider too, but it isn't a suggestion: without it Return
+    // would search for the text.
+    if ([type isEqualToString:@"url-what-you-typed"]) return NO;
     return [provider hasPrefix:@"History"] || [provider isEqualToString:@"Shortcuts"] || [type hasPrefix:@"history-"] || [type isEqualToString:@"search-history"];
 }
 

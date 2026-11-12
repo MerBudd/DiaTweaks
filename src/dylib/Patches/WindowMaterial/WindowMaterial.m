@@ -34,6 +34,12 @@ static NSMenu *DPMaterialChoices(void) {
     return menu;
 }
 
+// Liquid Glass needs NSGlassEffectView, which macOS 14 and 15 don't have, so they get Sidebar instead.
+static NSString *DPWindowMaterialChoice(void) {
+    NSString *choice = DPChoice(&DPWindowMaterial);
+    return [choice hasPrefix:@"glass."] && !NSClassFromString(@"NSGlassEffectView") ? [NSString stringWithFormat:@"material.%ld", (long)NSVisualEffectMaterialSidebar] : choice;
+}
+
 // Dia shows and hides these views too, so its last say is kept for when the patch lets go.
 static void DPView_setHidden(NSView *self, SEL _cmd, BOOL hidden) {
     DPSet(self, &DPDiaHiddenKey, @(hidden));
@@ -71,7 +77,7 @@ static NSVisualEffectMaterial DPWindowBackgroundMaterial(NSWindow *window) {
 static void DPApplyMaterialUnder(NSView *tint, BOOL floating) {
     NSView *content = tint.superview;
     if (!content) return;
-    NSString *choice = DPWindowMaterial.on ? DPChoice(&DPWindowMaterial) : nil;
+    NSString *choice = DPWindowMaterial.on ? DPWindowMaterialChoice() : nil;
     BOOL translucent = choice || (floating && DPTranslucentSidebar.on), glass = [choice hasPrefix:@"glass."];
     NSInteger value = choice.pathExtension.integerValue;
 
@@ -158,7 +164,7 @@ void DPApplyWindowMaterial(DPPatch *patch) {
 }
 
 NSString *DPVerifyWindowMaterial(DPPatch *patch) {
-    BOOL glass = DPWindowMaterial.on && [DPChoice(&DPWindowMaterial) hasPrefix:@"glass."];
+    BOOL glass = DPWindowMaterial.on && [DPWindowMaterialChoice() hasPrefix:@"glass."];
     NSArray<NSView *> *floating = DPFindViews(DPDiaFloatingSidebar);
     for (NSView *host in [DPWindowFrames() arrayByAddingObjectsFromArray:floating]) {
         NSView *tint = DPTintIn(host);
@@ -171,7 +177,7 @@ NSString *DPVerifyWindowMaterial(DPPatch *patch) {
         NSVisualEffectView *effect = (NSVisualEffectView *)DPFindView(tint.superview, ^BOOL(NSView *view) {
             return [view isKindOfClass:NSVisualEffectView.class] && !view.isHiddenOrHasHiddenAncestor;
         });
-        if (DPWindowMaterial.on && !glass && effect.material != DPChoice(&DPWindowMaterial).pathExtension.integerValue) return @"Dia's material came back";
+        if (DPWindowMaterial.on && !glass && effect.material != DPWindowMaterialChoice().pathExtension.integerValue) return @"Dia's material came back";
     }
     return nil;
 }

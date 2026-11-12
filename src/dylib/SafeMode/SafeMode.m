@@ -35,6 +35,12 @@ static BOOL DPCrashed(NSDictionary *state) {
 static void DPSurvived(void) {
     if (![DPState[@"launching"] boolValue]) return;
     DPState[@"launching"] = @NO;
+    // Level 2 loads no Settings, so nothing in Dia can turn patches back on. A launch that survives it steps down to level 1, which can.
+    // Once per build: if level 1 crashes its way back to 2, that is where it stays.
+    if (DPSafeMode == 2 && ![DPState[@"steppedDown"] boolValue]) {
+        DPState[@"level"] = @1;
+        DPState[@"steppedDown"] = @YES;
+    }
     [DPState writeToURL:DPStateURL error:nil];
 }
 
@@ -55,8 +61,6 @@ void DPBeginLaunch(void) {
     [DPState writeToURL:DPStateURL error:nil];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, DPSurviveSeconds * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ DPSurvived(); });
     DPOnQuit(^{ DPSurvived(); });
-    // Dia doesn't post NSApplicationWillTerminateNotification, so a normal quit only runs atexit.
-    atexit(DPSurvived);
 }
 
 void DPLeaveSafeMode(void) {

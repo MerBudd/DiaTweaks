@@ -1,4 +1,5 @@
 #import "Settings.h"
+#import <Carbon/Carbon.h>
 
 static char DPSettingsKey, DPSearchItemKey;
 
@@ -8,6 +9,17 @@ typedef NS_ENUM(NSInteger, DPSidebarRow) { DPDiaRow = -1, DPDividerRow, DPHomeRo
 static DPSidebarRow DPOurRow(NSTableView *table, NSInteger row) {
     NSInteger ours = row - (table.numberOfRows - DPOurRowCount);
     return row >= 0 && ours >= 0 ? ours : DPDiaRow;
+}
+
+// Dia puts a pane's toolbar items in when that pane is selected and takes them out, by identifier, the next time any of its panes is. Our rows never reach that, so the last pane's items would stay beside ours. They're taken out here; Dia puts them back when its pane is selected again.
+static void DPRemoveDiaPaneItems(NSToolbar *toolbar) {
+    void **slot = DPIvar(toolbar.delegate, "paneToolbarItems");
+    // A Swift array of objects is its storage, an NSArray; one bridged from Objective-C is tagged and left alone.
+    if (!slot || !*slot || ((uintptr_t)*slot & 0xC000000000000001)) return;
+    NSArray<NSToolbarItem *> *paneItems = (__bridge NSArray *)*slot;
+    NSSet *identifiers = [NSSet setWithArray:[paneItems valueForKey:@"itemIdentifier"]];
+    for (NSInteger i = toolbar.items.count - 1; i >= 0; i--)
+        if ([identifiers containsObject:toolbar.items[i].itemIdentifier]) [toolbar removeItemAtIndex:i];
 }
 
 @interface DPSettings : NSObject
@@ -98,6 +110,7 @@ static __weak DPPaneView *DPShownPane;
     [self allowResizing:YES];
 
     NSToolbar *toolbar = window.toolbar;
+    DPRemoveDiaPaneItems(toolbar);
     if (pane.searchItem) {
         DPSet(toolbar, &DPSearchItemKey, pane.searchItem);
         [toolbar insertItemWithItemIdentifier:NSToolbarFlexibleSpaceItemIdentifier atIndex:toolbar.items.count];
@@ -242,6 +255,20 @@ static void DPSettings_handleBack(id self, SEL _cmd) {
     DPCallOriginal(DPSettings_handleBack, self);
 }
 
+// ⌘F goes to the shown pane's search field, as in most apps' settings. The key's letter, so it follows the layout; where that isn't ASCII, the key's place on a US keyboard.
+static NSEvent *DPSettings_findKey(NSEvent *event) {
+    DPPaneView *pane = DPShownPane;
+    NSSearchToolbarItem *item = pane.searchItem;
+    if (!item || pane.hidden || event.window != pane.window || !event.window.isKeyWindow || DPShortcutRecording()) return event;
+    NSEventModifierFlags mods = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask & ~(NSEventModifierFlagCapsLock | NSEventModifierFlagNumericPad);
+    NSString *key = event.charactersIgnoringModifiers.lowercaseString;
+    BOOL f = key.length == 1 && [key characterAtIndex:0] < 128 ? [key characterAtIndex:0] == 'f' : event.keyCode == kVK_ANSI_F;
+    if (mods != NSEventModifierFlagCommand || !f) return event;
+    [item beginSearchInteraction];
+    [item.searchField selectText:nil];
+    return nil;
+}
+
 // Dia's sidebar implements neither, so there's nothing to hook or call through to.
 static void DPAddSidebarMethod(SEL sel, IMP imp) {
     const char *types = protocol_getMethodDescription(@protocol(NSTableViewDelegate), sel, NO, YES).types;
@@ -258,4 +285,5 @@ void DPInstallSettings(void) {
     DPAddSidebarMethod(@selector(tableView:shouldSelectRow:), (IMP)DPSidebar_shouldSelectRow);
     DPAddSidebarMethod(@selector(tableView:heightOfRow:), (IMP)DPSidebar_heightOfRow);
     DPHook(DPDiaSettingsController, @selector(toolbar:itemForItemIdentifier:willBeInsertedIntoToolbar:), (IMP)DPSettings_toolbarItem);
+    [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *event) { return DPSettings_findKey(event); }];
 }

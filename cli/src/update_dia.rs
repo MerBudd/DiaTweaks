@@ -96,6 +96,7 @@ fn install(env: &Env, ui: &Ui, diapatch: &Diapatch, ready: &str) -> Result<()> {
         if !done.status.success() {
             return Err(spinner.fail(anyhow::anyhow!("Couldn't install Dia:\n{}", done.tail(5))));
         }
+        spinner.check(installed(env, ready))?;
         spinner.stop(format_args!("Installed Dia {ready}"));
         ui.done(format_args!("Dia {ready} is installed."));
         return Ok(());
@@ -121,7 +122,26 @@ fn install(env: &Env, ui: &Ui, diapatch: &Diapatch, ready: &str) -> Result<()> {
     if !done.status.success() {
         return Err(spinner.fail(anyhow::anyhow!("Couldn't install Dia:\n{}", done.tail(5))));
     }
+    spinner.check(installed(env, ready))?;
     spinner.stop(format_args!("Installed Dia {ready} and reopened it"));
     ui.done(format_args!("Dia {ready} is installed."));
     Ok(())
+}
+
+/// diapatch exits 0 when it keeps an official Dia that was put there by hand and drops the staged build, so the Dia in
+/// place says whether the staged one went in.
+fn installed(env: &Env, ready: &str) -> Result<()> {
+    let Some(now) = dia::version_of(&env.app) else {
+        bail!(
+            "Dia {ready} wasn't installed, and there is no Dia at {}.",
+            env.app.display()
+        );
+    };
+    match (dia::is_patched(&env.app), now == ready) {
+        (true, true) => Ok(()),
+        (true, false) => bail!("Dia {ready} wasn't installed. Dia {now} is in place instead."),
+        (false, _) => bail!(
+            "Dia {ready} wasn't installed. Dia {now} is still in place, and it isn't patched. Run `diatweaks update` to patch it."
+        ),
+    }
 }

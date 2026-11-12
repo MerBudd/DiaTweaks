@@ -1,7 +1,7 @@
 #import "StdPatch/StdPatch.h"
 #include <simd/simd.h>
 
-extern DPPatch DPHideToolbar, DPRevealToolbarOnHover, DPShowToolbarWithSidebar, DPShowToolbarOnNewTab, DPPlainSelectedTab;
+extern DPPatch DPHideToolbar, DPRevealToolbarOnHover, DPShowToolbarWithSidebar, DPShowToolbarOnNewTab, DPShowToolbarWithTopTabs, DPPlainSelectedTab;
 extern DPPatch DPPeekToolbarOnCopy, DPCopyToast, DPShowLoadingProgress;
 extern NSHashTable<NSView *> *DPPanes;
 

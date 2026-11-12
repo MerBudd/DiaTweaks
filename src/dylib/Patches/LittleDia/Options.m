@@ -1,4 +1,5 @@
 #import "LittleDia.h"
+#import "Patches/Peek/Peek.h"
 
 static NSString *const DPWidthKey = @"littleDiaWidth", *const DPHeightKey = @"littleDiaHeight";
 
@@ -79,14 +80,18 @@ NSArray<NSView *> *DPLittleDiaRows(void) {
 
 extern DPPatch DPLittleDiaEscape;
 
-// Escape closes the focused Little Dia window. It still cancels typing in the address first, and leaves full screen
-// video to the page.
+// Escape closes the focused Little Dia window. It still cancels typing in the address first, cancels an input method's
+// composition in the page, and leaves full screen video to the page. Held down, it closes one window, not each in turn.
+// A Peek over the window gets Escape first: it closes, and the next Escape closes the window. Peek's own monitor takes the
+// key too, and which of the two sees it first changes from launch to launch, so this one stands aside either way.
 static BOOL DPEscapeCloses(NSEvent *event) {
     NSWindow *window = event.window;
     NSEventModifierFlags mods = event.modifierFlags & (NSEventModifierFlagCommand | NSEventModifierFlagShift | NSEventModifierFlagOption | NSEventModifierFlagControl);
-    if (!DPLittleDia.on || !DPLittleDiaEscape.on || event.keyCode != 53 || mods || !window.isKeyWindow) return NO;
-    if (!DPIsLittleDiaWindow(window) || (window.styleMask & NSWindowStyleMaskFullScreen)) return NO;
+    if (!DPLittleDia.on || !DPLittleDiaEscape.on || event.keyCode != 53 || mods || event.isARepeat || !window.isKeyWindow) return NO;
+    if (!DPIsLittleDiaWindow(window) || (window.styleMask & NSWindowStyleMaskFullScreen) || DPPeekCardIn(window)) return NO;
     if ([window.firstResponder isKindOfClass:NSText.class] && [(NSText *)window.firstResponder isFieldEditor]) return NO;
+    NSResponder<NSTextInputClient> *typing = (id)window.firstResponder;
+    if ([typing conformsToProtocol:@protocol(NSTextInputClient)] && typing.hasMarkedText) return NO;
     [window performClose:nil];
     return YES;
 }

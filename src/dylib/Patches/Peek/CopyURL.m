@@ -20,7 +20,7 @@ static BOOL DPPeekIsShortcut(NSEvent *event, NSString *title) {
     NSEventModifierFlags mask = item.keyEquivalentModifierMask & all;
     // A capital letter means Shift, whether or not the mask says so.
     if (![key isEqual:key.lowercaseString]) mask |= NSEventModifierFlagShift;
-    return (event.modifierFlags & all) == mask && [event.charactersIgnoringModifiers caseInsensitiveCompare:key] == NSOrderedSame;
+    return (event.modifierFlags & all) == mask && DPEventIsKey(event, key);
 }
 
 BOOL DPPeekCopyURL(DPPeekCard *peek, NSEvent *event) {

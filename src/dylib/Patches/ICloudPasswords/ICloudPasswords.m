@@ -18,8 +18,9 @@ static NSDictionary *DPHostAt(NSString *path) {
 static NSError *gWriteError;
 
 // Another app's manifest stays, unless it sends its extension straight to Apple's helper, as Better Passwords' does,
-// which can't start from a patched Dia. The relay starts that helper for any browser, so it stands in while this is on,
-// and the other app's manifest is kept aside to put back after.
+// which can't start from a patched Dia, or through Open Passwords' helper, which starts it from a signed browser Dia
+// may be the only one of. The relay starts that helper for any browser, so it stands in while this is on, and the
+// other app's manifest is kept aside to put back after.
 static NSError *DPRegisterHost(NSString *name, NSString *description, NSArray<NSString *> *origins, BOOL on) {
     NSFileManager *files = NSFileManager.defaultManager;
     NSString *path = DPHostManifestPath(name), *relay = DPAppSupport(@"DiaPatches/bin/diapatch");
@@ -27,7 +28,8 @@ static NSError *DPRegisterHost(NSString *name, NSString *description, NSArray<NS
     NSDictionary *host = DPHostAt(path);
     NSError *error;
     if ([files fileExistsAtPath:path] && ![host[@"path"] isEqual:relay]) {
-        if (!on || ![host[@"path"] isEqual:DPHostAt(kAppleHost)[@"path"]]) return nil;
+        BOOL replaceable = [host[@"path"] isEqual:DPHostAt(kAppleHost)[@"path"]] || [[host[@"path"] lastPathComponent] isEqual:@"OpenPasswordsHelper"];
+        if (!on || !replaceable) return nil;
         [files removeItemAtPath:kept error:nil];
         if (![files moveItemAtPath:path toPath:kept error:&error]) return error;
     }
@@ -47,14 +49,16 @@ static void DPRegisterHosts(BOOL on) {
                                  @[ @"chrome-extension://pejdijmoenmkgeppbflobdenhhabjlaj/", @"chrome-extension://mfbcdcnpokpoajjciilocoachedjkima/" ], on);
     NSError *betterPasswords = DPRegisterHost(@"io.github.fanckush.betterpasswords.bridge", @"DiaTweaks relay for Better Passwords to iCloud Passwords",
                                               @[ @"chrome-extension://ocongmkplhijgajnipnhhggfcjfdilgj/" ], on);
-    gWriteError = gWriteError ?: betterPasswords;
+    NSError *openPasswords = DPRegisterHost(@"com.openpasswords.icloud", @"DiaTweaks relay for Open Passwords to iCloud Passwords",
+                                            @[ @"chrome-extension://iaojbcjndjmmblmoemilknlnjijokkfg/", @"chrome-extension://abpahgnajbkclfhpodhjhlmgfjhpibaa/" ], on);
+    gWriteError = gWriteError ?: betterPasswords ?: openPasswords;
 }
 
 static NSString *DPICloudPasswordsProblem(DPPatch *patch) {
     NSDictionary *apple = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:kAppleHost] ?: NSData.data options:0 error:nil];
     if (![apple isKindOfClass:NSDictionary.class] || ![apple[@"path"] isKindOfClass:NSString.class] || ![NSFileManager.defaultManager isExecutableFileAtPath:apple[@"path"]])
         return @"This Mac doesn’t have Apple’s iCloud Passwords helper, which comes with macOS 14 and later.";
-    if (gWriteError) return [NSString stringWithFormat:@"Couldn’t set up iCloud Passwords: %@", gWriteError.localizedDescription];
+    if (gWriteError) return DPWriteProblem(DPHostManifestPath(@"com.apple.passwordmanager"), gWriteError);
     return DPRelayProblem() ?: DPHostProblem(DPHostManifestPath(@"com.apple.passwordmanager"), @"com.apple.passwordmanager");
 }
 
@@ -83,7 +87,7 @@ DP_PATCH(DPICloudPasswords) {
     .key = @"icloudPasswords",
     .order = 101,
     .title = @"Allow iCloud Passwords",
-    .detail = @"AutoFill passwords from Apple Passwords with the iCloud Passwords or Better Passwords extension. A patched Dia can’t start Apple’s helper, so each time the extension connects, the original Dia that DiaTweaks keeps opens for a moment, without windows, to start it. Experimental.",
+    .detail = @"AutoFill passwords from Apple Passwords with the iCloud Passwords, Better Passwords or Open Passwords extension. A patched Dia can’t start Apple’s helper, so each time one connects, the original Dia that DiaTweaks keeps opens briefly, without windows, to start it. Experimental.",
     .symbol = @"apple.passwords key.fill",
     .tint = @"systemGreenColor",
     .section = @"Passwords",

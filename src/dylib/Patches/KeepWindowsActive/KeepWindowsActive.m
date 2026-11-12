@@ -2,6 +2,7 @@
 
 @interface NSWindow (DPPrivate)
 - (BOOL)_hasActiveAppearance;
+- (BOOL)hasKeyAppearance;
 - (void)_setShadowParameters;
 @end
 
@@ -42,12 +43,31 @@ static void DPApplyKeepWindowsActive(DPPatch *patch) {
     }
 }
 
-static NSString *DPVerifyKeepWindowsActive(DPPatch *patch) {
-    for (NSWindow *window in NSApp.windows) {
-        if (!DPIsBrowserWindow(window) || !window.visible) continue;
-        if (patch->on && !window._hasActiveAppearance) return @"a window looks inactive";
-        if (!patch->on && window._hasActiveAppearance && !window.isKeyWindow && !window.isMainWindow) return @"a background window looks active";
+static BOOL DPAppKitAnswer(NSWindow *window, SEL sel) {
+    return ((BOOL (*)(id, SEL))DPDiaIMP(NSWindow.class, sel))(window, sel);
+}
+
+// A titled window that was never shown is neither key nor main, so AppKit alone calls it inactive, whichever app is in
+// front and however many windows are open. It stands in for a background window: on, the hooks make it look active
+// and key; off, both answers are AppKit's own, whatever else AppKit counts (a key child or sheet, another Space). The
+// pool frees it before any other check can list it.
+static NSString *DPProbeProblem(BOOL on) {
+    @autoreleasepool {
+        NSWindow *probe = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 100, 100) styleMask:NSWindowStyleMaskTitled
+                                                        backing:NSBackingStoreBuffered defer:YES];
+        probe.releasedWhenClosed = NO;
+        BOOL active = probe._hasActiveAppearance, key = probe.hasKeyAppearance;
+        if (on) return active && key ? nil : @"a window looks inactive";
+        return active == DPAppKitAnswer(probe, @selector(_hasActiveAppearance)) && key == DPAppKitAnswer(probe, @selector(hasKeyAppearance))
+            ? nil : @"a background window looks active";
     }
+}
+
+static NSString *DPVerifyKeepWindowsActive(DPPatch *patch) {
+    NSString *problem = DPProbeProblem(patch->on);
+    if (problem || !patch->on) return problem;
+    for (NSWindow *window in NSApp.windows)
+        if (DPIsBrowserWindow(window) && window.visible && !window._hasActiveAppearance) return @"a window looks inactive";
     return nil;
 }
 

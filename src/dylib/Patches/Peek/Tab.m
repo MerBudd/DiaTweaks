@@ -1,4 +1,5 @@
 #import "Patches/Peek/Peek.h"
+#import "Patches/CommandBar/Tabs.h"
 
 static id DPTabState(NSView *tab) {
     return DPSwiftValue(DPSwiftValue(DPSwiftValue(tab, @"viewModel"), @"stateSubject"), @"currentValue");
@@ -59,11 +60,11 @@ static BOOL DPTabIsTop(NSView *tab) {
 // Hides on hover over a sidebar tab, where Dia's close button shares its spot.
 @interface DPPeekTabBadge : NSView
 @property (nonatomic, weak) DPPeekCard *peek;
-@property (nonatomic, copy) NSString *contentKey;
+@property (nonatomic, copy) NSString *contentKey, *frontTabID;  // frontTabID: the tab in front when the Peek opened.
 @property (nonatomic) BOOL pinned;
 @property (nonatomic, strong) NSTrackingArea *tabTracking;
+@property (nonatomic, weak) NSView *trackedTab;  // Where tabTracking was added, which isn't its owner.
 @property (nonatomic, strong) NSTimer *watch;
-@property (nonatomic) NSInteger misses;
 @end
 
 @implementation DPPeekTabBadge
@@ -71,12 +72,13 @@ static BOOL DPTabIsTop(NSView *tab) {
 
 - (void)viewDidMoveToSuperview {
     [super viewDidMoveToSuperview];
-    [self.tabTracking.owner removeTrackingArea:self.tabTracking];
+    [self.trackedTab removeTrackingArea:self.tabTracking];
     self.tabTracking = nil;
     if (!self.superview || self.pinned) return;
     self.tabTracking = [[NSTrackingArea alloc] initWithRect:self.superview.bounds
         options:NSTrackingMouseEnteredAndExited | NSTrackingActiveAlways | NSTrackingInVisibleRect owner:self userInfo:nil];
     [self.superview addTrackingArea:self.tabTracking];
+    self.trackedTab = self.superview;
 }
 
 - (void)mouseEntered:(NSEvent *)event { if (!self.pinned) self.hidden = YES; }
@@ -93,10 +95,12 @@ static BOOL DPTabIsTop(NSView *tab) {
     }
     tab = DPPeekTabWithContent(peek.window, self.contentKey);
     if (!tab) {
-        if (++self.misses >= 2) [self closePeek];
+        // The sidebar only builds rows near its visible area, none inside a folded folder, and none are seen while Dia is hidden.
+        // So a missing row says nothing; the tab closing or another coming to the front does, and scripting knows both.
+        NSString *front = DPActiveTabID(peek.window);
+        if (!peek.source || (self.frontTabID && front && ![front isEqual:self.frontTabID])) [self closePeek];
         return;
     }
-    self.misses = 0;
     if (self.superview != tab) [tab addSubview:self];
     if (!DPTabSelected(tab)) [self closePeek];
 }
@@ -135,6 +139,7 @@ void DPPeekShowTabBadge(DPPeekCard *peek, id source) {
     badge.peek = peek;
     badge.pinned = pinned;
     badge.contentKey = DPPeekTabContentKey(tab);
+    badge.frontTabID = DPActiveTabID(peek.window);
     eyes.frame = NSOffsetRect(badge.bounds, 0, !pinned && top ? 2 : 0);  // The glyph sits low in a top-strip row.
     eyes.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [badge addSubview:eyes];

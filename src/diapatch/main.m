@@ -23,6 +23,7 @@ static NSString *const kDiaReleaseNotes = @"https://www.diabrowser.com/release-n
 static NSString *gHome, *gApp, *gCache, *gPristine, *gStaged, *gReady;
 static const char *gCommand;
 static FILE *gLog;
+static NSString *gFailure;  // the last thing fail() said
 
 #pragma mark - Output
 
@@ -32,6 +33,7 @@ static BOOL emit(FILE *out, NSString *format, ...) {
     va_start(args, format);
     NSString *line = [[NSString alloc] initWithFormat:format arguments:args];
     va_end(args);
+    if (out == stderr) gFailure = line;
     if (gLog) {
         char stamp[20];
         time_t now = time(NULL);
@@ -69,11 +71,35 @@ static BOOL removeTree(NSString *path) {
         || fail(@"cannot remove %@: %@", path, error.localizedDescription);
 }
 
+static BOOL removeQuietly(NSString *path) {
+    NSError *error;
+    if ([NSFileManager.defaultManager removeItemAtPath:path error:&error] || error.code == NSFileNoSuchFileError) return YES;
+    // A locked file, like the Icon\r a locked custom Finder icon leaves in a bundle, can be unlocked and removed.
+    for (NSString *item in [NSFileManager.defaultManager enumeratorAtPath:path])
+        [NSFileManager.defaultManager setAttributes:@{ NSFileImmutable : @NO } ofItemAtPath:[path stringByAppendingPathComponent:item] error:nil];
+    return [NSFileManager.defaultManager removeItemAtPath:path error:nil];
+}
+
+// Something left in .trash that can't be removed, like files that root owns, would stop every install and update after
+// it. It's set aside instead, and each run tries again.
+static BOOL emptyTrash(void) {
+    NSString *trash = inHome(@".trash"), *aside = [trash stringByAppendingFormat:@"-%@", NSUUID.UUID.UUIDString];
+    if (removeQuietly(trash)) return YES;
+    if (rename(trash.fileSystemRepresentation, aside.fileSystemRepresentation) != 0) return fail(@"cannot remove %@: %s", trash, strerror(errno));
+    note(@"cannot remove everything in %@, so it's set aside as %@", trash, aside.lastPathComponent);
+    return YES;
+}
+
+static void removeSetAside(void) {
+    for (NSString *name in [NSFileManager.defaultManager contentsOfDirectoryAtPath:gHome error:nil])
+        if ([name hasPrefix:@".trash-"]) removeQuietly(inHome(name));
+}
+
 // A delete cut short leaves part of a bundle; in .trash it can't pass for a whole one.
 static BOOL discard(NSString *path) {
     NSString *trash = inHome(@".trash");
-    if (!removeTree(trash)) return NO;
-    if (rename(path.fileSystemRepresentation, trash.fileSystemRepresentation) == 0) return removeTree(trash);
+    if (!emptyTrash()) return NO;
+    if (rename(path.fileSystemRepresentation, trash.fileSystemRepresentation) == 0) return emptyTrash();
     if (errno == ENOENT) return YES;
     // Only update's download can be on another volume, and only update reads it.
     return errno == EXDEV ? removeTree(path) : fail(@"cannot remove %@: %s", path, strerror(errno));
@@ -465,8 +491,17 @@ static NSString *sourceNotOlder(NSDictionary *latest) {
     return [@[ @"ahead", @"identical" ] containsObject:status] ? [commit substringToIndex:7] : nil;
 }
 
+// An updater only installs the files it knows about, so one older than a file leaves it out: v1.1.0 updating to v1.1.1
+// dropped app-icons. Offering the release again lets the new updater put the missing files in place.
+static BOOL tweaksInstalled(NSDictionary *latest) {
+    if (![installedRelease()[@"digest"] isEqual:latest[@"digest"]]) return NO;
+    for (NSString *path in tweaksTargets().allValues)
+        if (!exists(path)) return NO;
+    return YES;
+}
+
 static BOOL tweaksDiffer(NSDictionary *latest) {
-    return latest && ![installedRelease()[@"digest"] isEqual:latest[@"digest"]] && ![stagedRelease()[@"digest"] isEqual:latest[@"digest"]];
+    return latest && !tweaksInstalled(latest) && ![stagedRelease()[@"digest"] isEqual:latest[@"digest"]];
 }
 
 static BOOL tweaksAvailable(NSDictionary *latest) { return tweaksDiffer(latest) && !sourceNotOlder(latest); }
@@ -522,14 +557,24 @@ static BOOL applyTweaks(void) {
     // A release staged a while ago may since have been replaced, or overtaken by what's installed.
     NSString *problem;
     NSDictionary *latest = stagedRelease() ? latestTweaks(15, &problem) : nil;
-    if ([installedRelease()[@"digest"] isEqual:latest[@"digest"]]) removeTree(gStagedTweaks);
+    if (latest && tweaksInstalled(latest)) removeTree(gStagedTweaks);
     else if (tweaksAvailable(latest)) stageTweaks();  // if this fails, the staged release still installs
     NSString *tag = stagedRelease()[@"tag"];
     if (!tag) return removeTree(gStagedTweaks);
     NSDictionary<NSString *, NSString *> *targets = tweaksTargets();
     removeRelay();
     BOOL ok = makeDir(inHome(@"bin")) && unquarantine(gStagedTweaks);
-    for (NSString *name in targets) ok = ok && moveBundle([gStagedTweaks stringByAppendingPathComponent:name], targets[name]);
+    // A run that stopped part-way has moved some files out of here already, and a retry finishes the rest. The marker,
+    // written once a first run has seen every file, tells that from a release that never had one.
+    NSString *started = [gStagedTweaks stringByAppendingPathComponent:@".applying"];
+    BOOL resumed = exists(started);
+    for (NSString *name in targets)
+        ok = ok && (resumed || exists([gStagedTweaks stringByAppendingPathComponent:name]) || fail(@"DiaTweaks %@ has no %@, so it can't replace this install", tag, name));
+    ok = ok && (resumed || [NSData.data writeToFile:started atomically:YES] || fail(@"cannot write %@", started));
+    for (NSString *name in targets) {
+        NSString *from = [gStagedTweaks stringByAppendingPathComponent:name];
+        ok = ok && (!exists(from) || moveBundle(from, targets[name]));
+    }
     ok = ok && moveBundle([gStagedTweaks stringByAppendingPathComponent:@"release.plist"], inHome(@"release.plist"));
     return ok && removeTree(gStagedTweaks) && say(@"installed DiaTweaks %@", tag);
 }
@@ -572,7 +617,8 @@ static BOOL apply(void) {
 }
 
 static BOOL applyChosen(BOOL dia, BOOL tweaks) {
-    if (!dia && !tweaks) dia = tweaks = YES;
+    // Only --tweaks puts a staged release over a source build; a plain apply leaves it staged.
+    if (!dia && !tweaks) dia = YES, tweaks = installedRelease()[@"tag"] != nil;
     return (!tweaks || applyTweaks()) && (!dia || apply());
 }
 
@@ -600,6 +646,25 @@ static BOOL install(BOOL relaunch) {
                inHome(@"bin/diapatch"));
 }
 
+// A Dia build that couldn't be patched is offered again on every launch, and downloaded again if updates are automatic. So
+// it's remembered with the diapatch that failed on it; any other diapatch tries it afresh.
+static NSString *unpatchableFile(void) { return inHome(@"unpatchable.plist"); }
+
+static NSString *ownDigest(void) { return sha256(NSBundle.mainBundle.executablePath); }
+
+static void rememberUnpatchable(Release *release) {
+    NSString *line = [gFailure componentsSeparatedByString:@"\n"].firstObject;
+    note(@"Dia %@ can't be patched by this DiaTweaks, so it isn't downloaded automatically again", release.version);
+    [@{ @"build" : release.build, @"diapatch" : ownDigest() ?: @"", @"reason" : [@"Couldn’t patch this version: " stringByAppendingString:line ?: @"unknown error"] }
+        writeToFile:unpatchableFile() atomically:YES];
+}
+
+static NSString *unpatchableReason(Release *release) {
+    NSDictionary *saved = [NSDictionary dictionaryWithContentsOfFile:unpatchableFile()];
+    NSString *reason = saved[@"reason"];
+    return release && [saved[@"build"] isEqual:release.build] && [saved[@"diapatch"] isEqual:ownDigest()] && [reason isKindOfClass:NSString.class] ? reason : nil;
+}
+
 static BOOL update(void) {
     NSString *channel, *problem, *output;
     Release *release = latest(60, &channel, &problem);
@@ -618,9 +683,13 @@ static BOOL update(void) {
     }
     BOOL ok = check(@[ @"/usr/bin/ditto", @"-x", @"-k", zip, work ]) && check(@[ @"/usr/bin/xattr", @"-cr", work ])
         && ([buildOf(app) isEqual:release.build] || fail(@"the download holds build %@, not %@", buildOf(app), release.build))
-        && verifyOfficial(app) && build(app) && makeDir(gPristine.stringByDeletingLastPathComponent) && moveBundle(app, gPristine)
-        && (DPForgetApp(gPristine), YES);
+        && verifyOfficial(app);
+    // Only a failed patch is remembered: a bad download or a full disk can pass.
+    BOOL built = ok && build(app);
+    if (ok && !built) rememberUnpatchable(release);
+    ok = built && makeDir(gPristine.stringByDeletingLastPathComponent) && moveBundle(app, gPristine) && (DPForgetApp(gPristine), YES);
     removeTree(work);
+    if (ok) removeTree(unpatchableFile());
     return ok && say(@"Dia %@ is staged; relaunch Dia or run `diapatch apply` to install it", release.version);
 }
 
@@ -628,7 +697,7 @@ static BOOL update(void) {
 
 // Another app's host isn't ours to remove, and one the tweak kept aside goes back.
 static void removePasswordsHost(void) {
-    for (NSString *file in @[ @"com.apple.passwordmanager.json", @"io.github.fanckush.betterpasswords.bridge.json" ]) {
+    for (NSString *file in @[ @"com.apple.passwordmanager.json", @"io.github.fanckush.betterpasswords.bridge.json", @"com.openpasswords.icloud.json", @"com.diapatches.passkeys.json" ]) {
         NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:[@"Library/Application Support/Google/Chrome/NativeMessagingHosts" stringByAppendingPathComponent:file]];
         NSDictionary *host = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:path] ?: NSData.data options:0 error:NULL];
         if (![host isKindOfClass:NSDictionary.class] || ![host[@"path"] isEqual:inHome(@"bin/diapatch")]) continue;
@@ -650,11 +719,16 @@ static BOOL purge(void) {
         say(@"deleted %@", link);
     }
     for (NSString *name in @[ @"bin", @DYLIB, @"patches.json", @"release.plist", @"pristine", @"staged", @"identity", @"diapatch.log", @"safe-mode.plist",
-                              @".diatweaks.lock", @".incoming", @"icons", @"app-icons", @"passwords-helper", @"passwords.sock", @"onepassword.sock", @"passwords-launch" ])
+                              @".diatweaks.lock", @".incoming", @"icons", @"app-icons", @"passwords-helper", @"passwords.sock", @"onepassword.sock", @"passwords-launch",
+                              @"passkey-helper", @"passkey-helper.lock", @"passkeys-extension", @"unpatchable.plist",
+                              @"methods.txt", @"views.txt", @"layout-loops.txt" ])  // the last three are what developer tools write
         if (!discard(inHome(name))) return NO;
     for (NSString *name in [NSFileManager.defaultManager contentsOfDirectoryAtPath:gHome error:NULL])
-        if ([name hasPrefix:@".update-"] && !removeTree(inHome(name))) return NO;  // checkouts left by an interrupted diatweaks update
-    if (!removeTree([gCache stringByAppendingPathComponent:@"download"]) || !removeTree([gCache stringByAppendingPathComponent:@"release"])) return NO;
+        // .update- is a checkout left by an interrupted diatweaks update, little-dia- the folder of Little Dia's extension
+        if (([name hasPrefix:@".update-"] || [name hasPrefix:@"little-dia-"]) && !removeTree(inHome(name))) return NO;
+    removeSetAside();
+    for (NSString *name in @[ @"download", @"release", @"previews" ])
+        if (!removeTree([gCache stringByAppendingPathComponent:name])) return NO;
     rmdir(gCache.fileSystemRepresentation);
     if (rmdir(gHome.fileSystemRepresentation) == 0) return say(@"deleted %@", gHome);
     return say(@"kept %@: it holds files DiaPatches did not create", gHome);
@@ -717,6 +791,7 @@ static BOOL checkUpdates(void) {
             @"releaseNotes" : kDiaReleaseNotes,
             @"staged" : (stagedReady() ? versionOf(gStaged) : nil) ?: NSNull.null,
             @"available" : @((BOOL)(dia && newer(dia.build, buildOf(gPristine)) && !diaStaged)),
+            @"unpatchable" : unpatchableReason(dia) ?: NSNull.null,
             @"error" : dia ? NSNull.null : problem,
         },
         @"tweaks" : @{
@@ -741,7 +816,8 @@ static const char kUsage[] =
     "  update           download, verify and stage a newer Dia from your channel (stable or Early Birds)\n"
     "  self-update      download, verify and stage the latest DiaTweaks release if it isn't the one installed\n"
     "  apply [--wait PID] [--relaunch] [--dia] [--tweaks]\n"
-    "                   install what's staged once PID and Dia have quit, then reopen Dia; --dia or --tweaks limits it\n"
+    "                   install what's staged once PID and Dia have quit, then reopen Dia; --dia or --tweaks limits it,\n"
+    "                   and only --tweaks installs a staged DiaTweaks release over a source build\n"
     "  check --json     what's installed, available and staged for Dia and DiaTweaks\n"
     "  set-icon         use the icon chosen in the App Icon tweak\n"
     "  uninstall [--wait PID] [--relaunch] [--purge]\n"
@@ -801,7 +877,7 @@ int main(int argc, const char *argv[]) {
             say(@"waiting for another diapatch run to finish");
             flock(fileno(gLog), LOCK_EX);
         }
-        removeTree(inHome(@".trash"));  // what a run stopped mid-delete left
+        removeSetAside(), emptyTrash();  // what a run stopped mid-delete left
         BOOL ok = [command isEqualToString:@"install"] ? install([flags containsObject:@"--relaunch"])
             : [command isEqualToString:@"set-icon"]    ? switchIcon()
             : [command isEqualToString:@"build"]       ? build(gPristine) && say(@"staged patched Dia %@", versionOf(gStaged))

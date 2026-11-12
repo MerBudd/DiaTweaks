@@ -9,17 +9,6 @@
 @property (nonatomic) BOOL hovered, beginning, ending;
 @end
 
-// Anything with a scheme, or a host like example.com or localhost:3000. Else nil: a search.
-static NSURL *DPPeekTypedURL(NSString *text) {
-    if (!text.length || [text rangeOfCharacterFromSet:NSCharacterSet.whitespaceCharacterSet].location != NSNotFound) return nil;
-    NSURL *url = [NSURL URLWithString:text];
-    NSString *scheme = url.scheme.lowercaseString;
-    if (scheme && ([text containsString:@"://"] || [@[ @"about", @"chrome", @"data", @"mailto" ] containsObject:scheme])) return url;
-    if ([text hasPrefix:@"localhost"]) return [NSURL URLWithString:[@"http://" stringByAppendingString:text]];
-    if ([text containsString:@"."]) return [NSURL URLWithString:[@"https://" stringByAppendingString:text]];
-    return nil;
-}
-
 @implementation DPPeekAddress
 
 - (instancetype)initWithPage:(id)page {
@@ -134,7 +123,7 @@ static NSURL *DPPeekTypedURL(NSString *text) {
     NSString *typed = [self.field.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     [self end];
     if (!go || !typed.length) return;
-    NSURL *url = DPPeekTypedURL(typed) ?: DPPeekSearchURL(self.page, typed);
+    NSURL *url = DPAddressURL(typed) ?: DPPeekSearchURL(self.page, typed);
     if (url) DPPeekLoad(self.page, url);
 }
 

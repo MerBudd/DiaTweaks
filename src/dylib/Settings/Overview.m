@@ -60,7 +60,7 @@
 }
 
 - (NSView *)makeSafeModeRow {
-    NSView *row = DPRow(DPLabel(@"Patches are off because Dia quit unexpectedly twice right after opening.", 13, NSFontWeightRegular, NSColor.labelColor),
+    NSView *row = DPRow(DPLabel(@"Patches are off because Dia quit unexpectedly right after opening.", 13, NSFontWeightRegular, NSColor.labelColor),
                         [NSButton buttonWithTitle:@"Turn Patches Back On" target:self action:@selector(leaveSafeMode:)]);
     [self.searchText setObject:@"Safe mode patches off crashed quit unexpectedly turn back on" forKey:row];
     return row;

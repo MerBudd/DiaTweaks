@@ -30,15 +30,16 @@ NSDictionary *DPTabPlaces(NSDictionary<NSNumber *, NSString *> *urls) {
     return tabs && sessions.count == urls.count ? @{@"order": [tabs valueForKey:@"tabId"], @"sessions": sessions} : nil;
 }
 
-// index counts from the first unpinned tab, and `done` runs on the main queue.
-void DPMoveTab(id delegate, id browser, NSNumber *sid, NSInteger index, void (^done)(void)) {
+// index counts from the first unpinned tab, and `done` runs on the main queue. `failed`, if there is one, runs instead
+// when Dia makes no group for the tab, as when it has closed.
+void DPMoveTab(id delegate, id browser, NSNumber *sid, NSInteger index, void (^done)(void), void (^failed)(void)) {
     void (*create)(id, SEL, id, NSArray *, id, void (^)(id)) = (void *)objc_msgSend;
     void (*move)(id, SEL, id, id, NSInteger, void (^)(id)) = (void *)objc_msgSend;
     void (*ungroup)(id, SEL, id, NSArray *, void (^)(id)) = (void *)objc_msgSend;
     create(delegate, @selector(browser:createTabGroupWithSessionIds:properties:completion:), browser, @[sid], [objc_getClass(DPDiaTabGroupProperties) new], ^(id result) {
         dispatch_async(dispatch_get_main_queue(), ^{
             id group = [result respondsToSelector:@selector(groupId)] ? DPMsg(result, @selector(groupId)) : nil;
-            if (!group) return;
+            if (!group) return failed ? failed() : (void)0;
             move(delegate, @selector(browser:moveTabGroupWithId:toNewIndex:completion:), browser, group, index, ^(id _) {
                 dispatch_async(dispatch_get_main_queue(), ^{
                     ungroup(delegate, @selector(browser:removeTabsFromGroupWithSessionIds:completion:), browser, @[sid], ^(id _) {
@@ -52,7 +53,7 @@ void DPMoveTab(id delegate, id browser, NSNumber *sid, NSInteger index, void (^d
 
 static void DPRunMoves(id delegate, id browser, NSArray<NSArray *> *moves, NSUInteger index) {
     if (index >= moves.count) return;
-    DPMoveTab(delegate, browser, moves[index][0], [moves[index][1] integerValue], ^{ DPRunMoves(delegate, browser, moves, index + 1); });
+    DPMoveTab(delegate, browser, moves[index][0], [moves[index][1] integerValue], ^{ DPRunMoves(delegate, browser, moves, index + 1); }, nil);
 }
 
 // Ungrouped tabs keep their order, so one out of place means the window changed since, and planning stops.
@@ -81,5 +82,5 @@ void DPRestorePlaces(id delegate, id browser, NSDictionary *places) {
         NSMutableArray *now = [[tabs valueForKey:@"tabId"] mutableCopy];
         NSUInteger start = [now indexOfObject:first];
         if (start != NSNotFound) DPRunMoves(delegate, browser, DPPlanMoves(places[@"order"], now, sessions, start), 0);
-    });
+    }, nil);
 }

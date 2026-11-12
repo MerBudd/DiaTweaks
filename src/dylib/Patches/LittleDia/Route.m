@@ -23,34 +23,44 @@ static NSURL *DPLittleDiaLink(NSAppleEventDescriptor *event) {
     return url;
 }
 
-static BOOL DPOpenInLittleDia(NSURL *url, void (^missed)(void), void (^claimed)(NSWindow *window)) {
+// The worker drops a request it reaches after `until`, a little before the link gives up on its window: one that
+// opened after the link fell back to a tab would be a second copy of it.
+static BOOL DPOpenInLittleDia(NSURL *url, NSDictionary *noted, void (^missed)(void), void (^claimed)(NSWindow *window)) {
     NSRect frame = DPLittleDiaFrame();
     CGFloat top = NSMaxY(NSScreen.screens.firstObject.frame) - NSMaxY(frame);  // Chromium measures down from the top.
+    long long until = llround((NSDate.date.timeIntervalSince1970 + DPLittleDiaWait - 0.5) * 1000);
     NSDictionary *request = @{@"action" : @"open", @"url" : url.absoluteString, @"left" : @(NSMinX(frame)), @"top" : @(top),
-                              @"width" : @(NSWidth(frame)), @"height" : @(NSHeight(frame))};
-    DPNoteStackForLink();
+                              @"width" : @(NSWidth(frame)), @"height" : @(NSHeight(frame)), @"until" : @(until)};
     if (!DPSendToLittleDia(request)) return NO;
-    DPExpectLittleDiaWindow(frame, missed, claimed);
+    DPExpectLittleDiaWindow(frame, noted, missed, claimed);
     return YES;
 }
 
-// A link that opens Dia arrives before its extensions have loaded, so it waits for them, up to 10 seconds.
-static void DPOpenWhenReady(NSURL *url, void (^fallback)(void), int tries) {
-    if (DPOpenInLittleDia(url, fallback, nil)) return;
+// A link that opens Dia arrives before its extensions have loaded, so it waits for them, up to 10 seconds. The stack is
+// noted once, when the link arrives: noted again later, it would find Dia in front.
+static void DPOpenWhenReady(NSURL *url, NSDictionary *noted, void (^fallback)(void), int tries) {
+    if (DPOpenInLittleDia(url, noted, fallback, nil)) return;
     if (tries <= 0 || !DPLittleDiaStarting()) return fallback();
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 250 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{ DPOpenWhenReady(url, fallback, tries - 1); });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 250 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{ DPOpenWhenReady(url, noted, fallback, tries - 1); });
 }
 
 static void DPOpenURLEvents_handle(id self, SEL _cmd, NSAppleEventDescriptor *event, NSAppleEventDescriptor *reply) {
     NSURL *url = DPLittleDia.on ? DPLittleDiaLink(event) : nil;
     if (!url) return DPCallOriginal(DPOpenURLEvents_handle, self, event, reply);
     DPLinkArrived();
-    DPOpenWhenReady(url, ^{ DPCallOriginal(DPOpenURLEvents_handle, self, event, [NSAppleEventDescriptor nullDescriptor]); }, 40);
+    DPOpenWhenReady(url, DPNoteStackForLink(), ^{
+        DPBringBackPutAway(nil);  // Not taken by Little Dia, so the tab opens in a window that must be showing.
+        DPCallOriginal(DPOpenURLEvents_handle, self, event, [NSAppleEventDescriptor nullDescriptor]);
+    }, 40);
 }
 
-void DPOpenLinkInLittleDia(NSURL *url) { DPOpenInLittleDia(url, ^{ NSBeep(); }, nil); }
+void DPOpenLinkInLittleDia(NSURL *url) {
+    DPOpenInLittleDia(url, DPNoteStackForLink(), ^{ NSBeep(); }, nil);
+}
 
-void DPOpenBlankLittleDia(void) { DPOpenInLittleDia([NSURL URLWithString:@"about:blank"], ^{ NSBeep(); }, ^(NSWindow *window) { DPEditLittleDiaAddress(window); }); }
+void DPOpenBlankLittleDia(void) {
+    DPOpenInLittleDia([NSURL URLWithString:@"about:blank"], DPNoteStackForLink(), ^{ NSBeep(); }, ^(NSWindow *window) { DPEditLittleDiaAddress(window); });
+}
 
 void DPInstallLittleDiaRoute(void) {
     DPHook(DPDiaOpenURLEvents, @selector(handleEvent:withReplyEvent:), (IMP)DPOpenURLEvents_handle);

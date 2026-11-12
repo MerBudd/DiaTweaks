@@ -50,7 +50,7 @@ static void DPArmUndo(void (^undo)(void)) {
             void (^undo)(void) = DPUndoGrouping;
             DPUndoGrouping = nil;
             NSEventModifierFlags mods = event.modifierFlags & (NSEventModifierFlagCommand | NSEventModifierFlagShift | NSEventModifierFlagOption | NSEventModifierFlagControl);
-            if (!undo || mods != NSEventModifierFlagCommand || ![event.charactersIgnoringModifiers isEqualToString:@"z"]) return event;
+            if (!undo || DPShortcutRecording() || mods != NSEventModifierFlagCommand || ![event.charactersIgnoringModifiers isEqualToString:@"z"]) return event;
             undo();
             return nil;
         }];

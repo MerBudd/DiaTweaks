@@ -20,6 +20,11 @@ static BOOL DPLaunchCLI(NSArray<NSString *> *args) {
 
 static NSUserDefaults *DPUpdateDefaults(void) { return [[NSUserDefaults alloc] initWithSuiteName:@"com.diapatches"]; }
 
+// DiaTweaks built from source has no release.plist, which diapatch writes when it installs a release. Updating it is up to the user.
+BOOL DPIsLocalBuild(NSString *part) {
+    return [part isEqual:DPTweaks] && ![[NSDictionary dictionaryWithContentsOfFile:DPSupport(@"release.plist")][@"tag"] isKindOfClass:NSString.class];
+}
+
 static NSString *DPAutoKey(NSString *part) { return [part isEqual:DPDia] ? @"autoUpdateDia" : @"autoUpdateTweaks"; }
 
 DPAutoLevel DPAutoLevelOf(NSString *part) {
@@ -68,7 +73,7 @@ void DPHandOffAndQuit(NSArray<NSString *> *args) {
 @implementation DPUpdates {
     NSMutableDictionary<NSString *, NSMutableArray *> *_whenDownloaded;
     NSMutableArray *_checked;
-    NSMutableDictionary<NSString *, NSString *> *_failed;  // part → why its download failed, or @"" if unknown
+    NSMutableDictionary<NSString *, NSString *> *_failed;  // part → why its download or patch failed, or @"" if unknown
     NSTimer *_progress;
     NSDictionary *_found;
     NSMutableDictionary<NSString *, id> *_pretend;  // part → @"available", the NSDate its download started, or @"staged"
@@ -100,6 +105,9 @@ void DPHandOffAndQuit(NSArray<NSString *> *args) {
     DPRunCLI(@[@"check", @"--json"], ^(NSString *output) {
         id found = output ? [NSJSONSerialization JSONObjectWithData:[output dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil] : nil;
         self->_found = [found isKindOfClass:NSDictionary.class] ? found : nil;
+        // diapatch remembers a Dia that it couldn't patch, so that it isn't downloaded again, and says why here.
+        NSString *unpatchable = self->_found[DPDia][@"unpatchable"];
+        if ([unpatchable isKindOfClass:NSString.class] && !self->_failed[DPDia] && !self->_whenDownloaded[DPDia]) self->_failed[DPDia] = unpatchable;
         self->_checking = NO;
         NSArray *waiting = [self->_checked copy];
         [self->_checked removeAllObjects];
@@ -123,6 +131,14 @@ void DPHandOffAndQuit(NSArray<NSString *> *args) {
         found[part] = entry;
     }
     return found;
+}
+
+// diapatch exits 0 even when it couldn't reach a feed, and says so in that part's "error" instead.
+- (NSString *)checkProblem {
+    NSMutableArray<NSString *> *names = [NSMutableArray new];
+    for (NSString *part in @[DPDia, DPTweaks])
+        if ([_found[part][@"error"] isKindOfClass:NSString.class]) [names addObject:DPPartName(part)];
+    return names.count == 2 ? @"Couldn’t check for updates" : names.count ? [NSString stringWithFormat:@"Couldn’t check for %@ updates", names[0]] : nil;
 }
 
 - (BOOL)available:(NSString *)part { return [self.found[part][@"available"] boolValue]; }
@@ -215,7 +231,7 @@ static void DPShowUpdateAlert(void) {
         }
         NSAlert *alert = [NSAlert new];
         if (!parts.count) {
-            alert.messageText = updates.found ? @"Dia and DiaTweaks are up to date" : @"Couldn’t check for updates";
+            alert.messageText = !updates.found ? @"Couldn’t check for updates" : updates.checkProblem ?: @"Dia and DiaTweaks are up to date";
             [alert runModal];
             return;
         }
@@ -227,13 +243,30 @@ static void DPShowUpdateAlert(void) {
         if ([alert runModal] != NSAlertFirstButtonReturn) return;
         __block NSUInteger left = parts.count;
         for (NSString *part in parts)
-            [updates download:part then:^{ if (--left == 0) [updates installAndRelaunch:parts]; }];
+            [updates download:part then:^{
+                if (--left != 0) return;
+                // A download that failed leaves nothing to install, and quitting for it would only relaunch the same Dia.
+                NSMutableArray<NSString *> *staged = [NSMutableArray new], *missing = [NSMutableArray new], *reasons = [NSMutableArray new];
+                for (NSString *each in parts) {
+                    if ([updates staged:each]) {
+                        [staged addObject:each];
+                        continue;
+                    }
+                    [missing addObject:DPPartName(each)];
+                    if ([updates failure:each]) [reasons addObject:[updates failure:each]];
+                }
+                if (staged.count) return [updates installAndRelaunch:staged];
+                NSAlert *failed = [NSAlert new];
+                failed.messageText = [@"Couldn’t download " stringByAppendingString:[missing componentsJoinedByString:@" and "]];
+                failed.informativeText = [reasons componentsJoinedByString:@"\n"];
+                [failed runModal];
+            }];
     }];
 }
 
 static void DPInstallOnQuit(void) {
     BOOL dia = DPAutoLevelOf(DPDia) == DPAutoInstall && [NSFileManager.defaultManager fileExistsAtPath:DPSupport(@"staged/Dia.app")];
-    BOOL tweaks = DPAutoLevelOf(DPTweaks) == DPAutoInstall && [NSFileManager.defaultManager fileExistsAtPath:DPSupport(@"staged/DiaTweaks")];
+    BOOL tweaks = DPAutoLevelOf(DPTweaks) == DPAutoInstall && !DPIsLocalBuild(DPTweaks) && [NSFileManager.defaultManager fileExistsAtPath:DPSupport(@"staged/DiaTweaks")];
     if (!dia && !tweaks) return;
     NSMutableArray *args = [NSMutableArray arrayWithObjects:@"apply", @"--wait", @(getpid()).stringValue, nil];
     if (dia) [args addObject:@"--dia"];
@@ -286,7 +319,8 @@ void DPInstallUpdates(void) {
         DPUpdates *updates = DPUpdates.shared;
         [updates check:^{
             for (NSString *part in @[DPDia, DPTweaks])
-                if (DPAutoLevelOf(part) >= DPAutoDownload && [updates available:part]) [updates download:part then:nil];
+                if (DPAutoLevelOf(part) >= DPAutoDownload && !DPIsLocalBuild(part) && [updates available:part] && ![updates failed:part])
+                    [updates download:part then:nil];
         }];
     });
     DPOnQuit(^{ DPInstallOnQuit(); });

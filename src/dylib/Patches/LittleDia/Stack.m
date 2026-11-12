@@ -4,11 +4,10 @@
 // back where it was: the order of the windows on screen is noted just before Dia comes forward, and after the small
 // window opens, every Dia window that was behind the app the link came from goes back behind it.
 
-static NSArray<NSDictionary *> *DPBeforeActivating, *DPForLink;
+static NSArray<NSDictionary *> *DPBeforeActivating;
 static NSDate *DPNotedAt, *DPUnhiddenAt;
 static NSMutableArray<NSWindow *> *DPPutAway;  // Dia's other windows, while a link opened with Dia hidden is open.
 static NSMapTable<NSWindow *, NSNumber *> *DPVeiled;  // Windows kept see-through as Dia unhides, with their own alpha.
-static pid_t DPSource;  // The app the link was clicked in, if Dia wasn't in front.
 
 // Normal windows on screen, front to back, with the app each belongs to. Needs no screen recording permission.
 static NSArray<NSDictionary *> *DPWindowStack(void) {
@@ -19,20 +18,19 @@ static NSArray<NSDictionary *> *DPWindowStack(void) {
     return stack;
 }
 
-void DPNoteStackForLink(void) {
-    if (!NSApp.active) DPForLink = DPWindowStack();
-    else if (DPNotedAt && DPNotedAt.timeIntervalSinceNow > -2) DPForLink = DPBeforeActivating;
-    else DPForLink = nil;  // Dia was already in front: nothing to put back.
-    NSNumber *me = @(getpid());
-    DPSource = 0;
-    for (NSDictionary *window in DPForLink)
+// Each link keeps its own: the next can arrive before this one's window does, and the app it came from may differ.
+NSDictionary *DPNoteStackForLink(void) {
+    NSArray<NSDictionary *> *stack = nil;  // Dia was already in front: nothing to put back.
+    if (!NSApp.active) stack = DPWindowStack();
+    else if (DPNotedAt && DPNotedAt.timeIntervalSinceNow > -2) stack = DPBeforeActivating;
+    NSNumber *me = @(getpid()), *source = @0;  // The app the link was clicked in, if Dia wasn't in front.
+    for (NSDictionary *window in stack)
         if (![window[@"pid"] isEqual:me]) {
-            DPSource = [window[@"pid"] intValue];
+            source = window[@"pid"];
             break;
         }
+    return @{@"stack" : stack ?: @[], @"source" : source};
 }
-
-pid_t DPLinkSource(void) { return DPSource; }
 
 // Closing the window goes back to that app, instead of Dia bringing its main window up in its place.
 void DPReturnToSource(pid_t pid) {
@@ -82,6 +80,9 @@ BOOL DPHideAgain(void) {
     if (!DPPutAway.count) return NO;
     for (NSWindow *window in NSApp.windows)
         if (DPIsLittleDiaWindow(window) && window.visible) return NO;
+    // A window shown or opened since is one the user is working in.
+    for (NSWindow *window in NSApp.windows)
+        if (window.visible && !window.miniaturized && window.level == NSNormalWindowLevel && window.canBecomeMainWindow) return NO;
     // Hiding notes which windows are showing, so they're shown first, behind everything, for unhiding to bring back.
     for (NSWindow *window in DPPutAway) [window orderBack:nil];
     [DPPutAway removeAllObjects];
@@ -89,9 +90,9 @@ BOOL DPHideAgain(void) {
     return YES;
 }
 
-void DPRestoreStack(NSWindow *little) {
+void DPRestoreStack(NSWindow *little, NSDictionary *noted) {
     if (DPPutAwayIfHidden(little)) return;
-    NSArray<NSDictionary *> *stack = DPForLink;
+    NSArray<NSDictionary *> *stack = noted[@"stack"];
     NSNumber *me = @(getpid());
     NSUInteger front = [stack indexOfObjectPassingTest:^BOOL(NSDictionary *window, NSUInteger i, BOOL *stop) { return ![window[@"pid"] isEqual:me]; }];
     if (front == NSNotFound) return;
@@ -105,8 +106,6 @@ void DPRestoreStack(NSWindow *little) {
     }
     for (NSWindow *window in behind) [window orderWindow:NSWindowBelow relativeTo:anchor];
 }
-
-void DPFinishStack(void) { DPForLink = nil; }
 
 void DPInstallLittleDiaStack(void) {
     DPPutAway = [NSMutableArray array];

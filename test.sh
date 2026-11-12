@@ -13,8 +13,10 @@ plutil -replace launching -bool NO "$support/safe-mode.plist" 2>/dev/null || tru
 cp -f build/DiaPatches.dylib "$support/DiaPatches.dylib"
 rm -f "$report"
 DIAPATCH_TEST="$report" nohup "$dia" >/dev/null 2>&1 &
-for _ in $(seq 240); do [ -f "$report" ] && break; sleep 0.5; done
-[ -f "$report" ] || { echo "Dia wrote no report in 2 minutes. Is it patched (./install.sh)?" >&2; exit 1; }
+test_pid=$!
+# Each tweak adds scenarios, so a run takes minutes. Stop early if this Dia quits, such as when another Dia was already open.
+for _ in $(seq 600); do [ -f "$report" ] && break; kill -0 $test_pid 2>/dev/null || break; sleep 0.5; done
+[ -f "$report" ] || { echo "Dia wrote no report in 5 minutes, or quit before writing one. Is it patched (./install.sh), and was every other Dia closed?" >&2; exit 1; }
 
 exec python3 - "$report" <<'EOF'
 import json, sys

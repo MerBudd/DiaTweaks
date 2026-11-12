@@ -6,11 +6,12 @@ static NSDictionary *DPDefaultToggleToolbarShortcut(void) { return @{ @"keyCode"
 
 static void DPInstallToggleToolbar(void) {
     DPKeyMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *event) {
-        if (DPToggleToolbarVisibility.on && !event.isARepeat && DPShortcutMatches(event, &DPToggleToolbarVisibility)) {
+        if (!DPToggleToolbarVisibility.on || !DPShortcutMatches(event, &DPToggleToolbarVisibility)) return event;
+        if (!event.isARepeat) {
             DPSetPatch(&DPHideToolbar, !DPHideToolbar.on, YES);
             [NSNotificationCenter.defaultCenter postNotificationName:DPPatchesDidChangeNotification object:nil];
         }
-        return event;
+        return nil;
     }];
 }
 

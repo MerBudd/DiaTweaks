@@ -72,6 +72,8 @@ BOOL DPPeekGenie(void);
 BOOL DPPeekShowsToolbar(void);
 NSArray<NSView *> *DPPeekSettingsRows(void);
 
+extern BOOL DPPeekGiving;  // YES while a Peek hands its page to Dia as a tab, which Shift must not turn into another Peek.
+
 void DPPeekInstallPages(void);
 BOOL DPPeekCanOpen(id source);
 BOOL DPPeekShows(id page);

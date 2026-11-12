@@ -1,4 +1,5 @@
 #import "StdPatch/StdPatch.h"
+#import "Commands/GroupTabs/GroupTabs.h"
 
 // Dia collapses a folder when its last tab or live item goes away, and leaves it shut when new ones arrive. A folder
 // that collapses without a click on its header gets one click to open it again. With tabs at the top a folder is a
@@ -68,6 +69,8 @@ static void DPCheckFolder(NSView *folder) {
     DPSet(folder, &DPExpandedKey, expanded);
     CFTimeInterval now = CACurrentMediaTime();
     if (!collapsed || !DPKeepFoldersOpen.on || now - [DPGet(folder, &DPClickedKey) doubleValue] < 1) return;
+    // Collapse All Tab Groups folds one group at a time, and a single folder on screen would look like one that emptied.
+    if (now - DPFoldedAt < 2) return;
     // Don't fight Dia if it shuts the folder again straight away.
     if (now - [DPGet(folder, &DPReopenedKey) doubleValue] < 1) return;
     if (!DPCollapsedFolders.count)

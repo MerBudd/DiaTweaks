@@ -178,8 +178,10 @@ static NSView *DPPeekMakeHint(NSString *text, NSArray<NSString *> *keys, CGFloat
 void DPPeekLayoutHints(NSView *controls, CGFloat availableRight) {
     for (DPPeekButton *button in [controls.subviews copy]) {
         if (![button isKindOfClass:DPPeekButton.class]) continue;
+        CGFloat shown = button.pill.alphaValue;  // A hint showing under the pointer stays.
         [button.pill removeFromSuperview];
         NSView *pill = DPPeekMakeHint(button.hintText, button.hintKeys, MAX(40, availableRight - DPHintRightGap - 2 * DPHintPadX));
+        pill.alphaValue = shown;
         pill.frame = NSMakeRect(NSMaxX(button.frame) + DPHintRightGap, NSMidY(button.frame) - NSHeight(pill.frame) / 2, NSWidth(pill.frame), NSHeight(pill.frame));
         button.pill = pill;
         [controls addSubview:pill];

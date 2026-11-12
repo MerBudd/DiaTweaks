@@ -46,7 +46,7 @@ static BOOL DPSetUpPasskeys(void) {
 }
 
 static NSString *DPPasskeysProblem(DPPatch *patch) {
-    if (gWriteError) return [NSString stringWithFormat:@"Couldn’t write %@: %@", gWriteError.userInfo[NSFilePathErrorKey] ?: DPExtensionFolder(), gWriteError.localizedDescription];
+    if (gWriteError) return DPWriteProblem(DPExtensionFolder(), gWriteError);
     for (int i = 0; i < 4; i++) {
         NSString *file = [DPExtensionFolder() stringByAppendingPathComponent:kFiles[i]];
         if (![NSFileManager.defaultManager fileExistsAtPath:file]) return [NSString stringWithFormat:@"%@ is missing.", file];

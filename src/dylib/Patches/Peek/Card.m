@@ -104,11 +104,21 @@ DPPeekCard *DPPeekCardIn(NSWindow *window) {
     });
 }
 
-static NSView *DPPeekPane(NSWindow *window) {
-    NSView *pane = nil;
-    for (NSView *candidate in DPFindViews(DPDiaContentPane))
-        if (candidate.window == window && NSWidth(candidate.bounds) * NSHeight(candidate.bounds) > NSWidth(pane.bounds) * NSHeight(pane.bounds)) pane = candidate;
-    return pane;
+// The pane the link is in, so a split's card covers the side the click was on. `area` is the link, or the pointer, on screen.
+// Failing that, the largest.
+static NSView *DPPeekPane(NSWindow *window, NSRect area) {
+    NSView *pane = nil, *under = nil;
+    CGFloat overlap = 0;
+    for (NSView *candidate in DPFindViews(DPDiaContentPane)) {
+        if (candidate.window != window) continue;
+        NSRect hit = NSIntersectionRect([window convertRectToScreen:[candidate convertRect:candidate.bounds toView:nil]], area);
+        if (!candidate.isHiddenOrHasHiddenAncestor && NSWidth(hit) * NSHeight(hit) > overlap) {
+            under = candidate;
+            overlap = NSWidth(hit) * NSHeight(hit);
+        }
+        if (NSWidth(candidate.bounds) * NSHeight(candidate.bounds) > NSWidth(pane.bounds) * NSHeight(pane.bounds)) pane = candidate;
+    }
+    return under ?: pane;
 }
 
 static NSView *DPPeekHolder(NSWindow *window, NSView *pane) {
@@ -128,30 +138,46 @@ static BOOL DPIsDigitKey(NSEvent *event) {
     return key.length == 1 && [key characterAtIndex:0] >= '1' && [key characterAtIndex:0] <= '9';
 }
 
+// The key's letter, so a shortcut follows the layout. Where that isn't ASCII (Russian, Greek, Hebrew), the key's place on a US keyboard.
+static BOOL DPIsKey(NSEvent *event, unichar letter, unsigned short code) {
+    NSString *key = event.charactersIgnoringModifiers.lowercaseString;
+    return key.length == 1 && [key characterAtIndex:0] < 128 ? [key characterAtIndex:0] == letter : event.keyCode == code;
+}
+
+// The application menu (Hide, Quit, Settings) and the Window menu (Minimize). Not the others: they act on the tab behind the card.
+static BOOL DPPerformAppShortcut(NSEvent *event, NSEventModifierFlags mods) {
+    if (!(mods & (NSEventModifierFlagCommand | NSEventModifierFlagControl))) return NO;
+    return [NSApp.mainMenu.itemArray.firstObject.submenu performKeyEquivalent:event] || [NSApp.windowsMenu performKeyEquivalent:event];
+}
+
 // A focused peek page swallows ⌘S and ⌃1–9 (switch profile), which Dia's tabs pass on to the menu. The keypad's digits count too.
+// It swallows the application and Window menus' shortcuts as well, such as ⌘H.
 static id DPWatchKeys(DPPeekCard *card) {
     __weak DPPeekCard *weak = card;
     return [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *event) {
         DPPeekCard *peek = weak;
         if (!peek || event.window != peek.window) return event;
         NSEventModifierFlags mods = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask & ~(NSEventModifierFlagCapsLock | NSEventModifierFlagNumericPad);
-        BOOL command = mods == NSEventModifierFlagCommand, control = mods == NSEventModifierFlagControl, editing = [peek.window.firstResponder isKindOfClass:NSText.class];
+        // A page's field is Chromium's view, not an NSText. Escape there cancels an input method's composition.
+        id responder = peek.window.firstResponder;
+        BOOL command = mods == NSEventModifierFlagCommand, control = mods == NSEventModifierFlagControl;
+        BOOL editing = [responder isKindOfClass:NSText.class] || ([responder conformsToProtocol:@protocol(NSTextInputClient)] && [responder hasMarkedText]);
         if (DPPeekCopyURL(peek, event)) return nil;
-        if (command && event.keyCode == kVK_ANSI_O) [peek close:DPPeekTab];
+        if (command && DPIsKey(event, 'o', kVK_ANSI_O)) [peek close:DPPeekTab];
         // Dia's menu would go back, forward or reload the tab behind the card. Without the toolbar, the card stays stock.
-        else if (command && peek.toolbar && event.keyCode == kVK_ANSI_LeftBracket) DPPeekNavigate(peek.page, DPPeekBack);
-        else if (command && peek.toolbar && event.keyCode == kVK_ANSI_RightBracket) DPPeekNavigate(peek.page, DPPeekForward);
-        else if (command && peek.toolbar && event.keyCode == kVK_ANSI_R) DPPeekNavigate(peek.page, DPPeekReload);
-        else if (command && peek.toolbar && event.keyCode == kVK_ANSI_L) DPPeekEditToolbarAddress(peek);
-        else if ((command && event.keyCode == kVK_ANSI_W) || (!mods && event.keyCode == kVK_Escape && !editing)) [peek close:DPPeekClose];
-        else if (!((command && event.keyCode == kVK_ANSI_S) || (control && DPIsDigitKey(event))) || ![NSApp.mainMenu performKeyEquivalent:event]) return event;
+        else if (command && peek.toolbar && DPIsKey(event, '[', kVK_ANSI_LeftBracket)) DPPeekNavigate(peek.page, DPPeekBack);
+        else if (command && peek.toolbar && DPIsKey(event, ']', kVK_ANSI_RightBracket)) DPPeekNavigate(peek.page, DPPeekForward);
+        else if (command && peek.toolbar && DPIsKey(event, 'r', kVK_ANSI_R)) DPPeekNavigate(peek.page, DPPeekReload);
+        else if (command && peek.toolbar && DPIsKey(event, 'l', kVK_ANSI_L)) DPPeekEditToolbarAddress(peek);
+        else if ((command && DPIsKey(event, 'w', kVK_ANSI_W)) || (!mods && event.keyCode == kVK_Escape && !editing)) [peek close:DPPeekClose];
+        else if (!DPPerformAppShortcut(event, mods) && !(((command && DPIsKey(event, 's', kVK_ANSI_S)) || (control && DPIsDigitKey(event))) && [NSApp.mainMenu performKeyEquivalent:event])) return event;
         return nil;
     }];
 }
 
 // Below the page area, so it paints unseen at the card's size.
 NSView *DPPeekWarmHost(NSWindow *window, id<DPPeekPage> page) {
-    NSView *host = [page createPaneHostView], *pane = DPPeekPane(window);
+    NSView *host = [page createPaneHostView], *pane = DPPeekPane(window, (NSRect){NSEvent.mouseLocation, {1, 1}});
     if (!host || !pane) return nil;
     NSView *holder = DPPeekHolder(window, pane);
     NSRect area = [holder convertRect:pane.bounds fromView:pane];
@@ -162,7 +188,7 @@ NSView *DPPeekWarmHost(NSWindow *window, id<DPPeekPage> page) {
 }
 
 DPPeekCard *DPPeekShowCard(NSWindow *window, id<DPPeekPage> page, NSView *warmHost, NSRect screenLink) {
-    NSView *host = warmHost ?: [page createPaneHostView], *pane = DPPeekPane(window);
+    NSView *host = warmHost ?: [page createPaneHostView], *pane = DPPeekPane(window, screenLink);
     if (!window || !host || DPPeekCardIn(window)) return nil;
     NSView *holder = DPPeekHolder(window, pane);
     DPPeekCard *peek = [[DPPeekCard alloc] initWithFrame:pane ? [holder convertRect:pane.bounds fromView:pane] : holder.bounds];

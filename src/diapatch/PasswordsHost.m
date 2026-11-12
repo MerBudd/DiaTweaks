@@ -6,10 +6,12 @@
 
 static NSString *const kAppleHost = @"/Library/Google/Chrome/NativeMessagingHosts/com.apple.passwordmanager.json";
 
-// Apple's two iCloud Passwords extensions, and Better Passwords, which talks to Apple's helper too.
+// Apple's two iCloud Passwords extensions, and Better Passwords and Open Passwords, which talk to Apple's helper too.
 static const char *const kAppleOrigins[] = { "chrome-extension://pejdijmoenmkgeppbflobdenhhabjlaj/",
                                              "chrome-extension://mfbcdcnpokpoajjciilocoachedjkima/",
-                                             "chrome-extension://ocongmkplhijgajnipnhhggfcjfdilgj/" };
+                                             "chrome-extension://ocongmkplhijgajnipnhhggfcjfdilgj/",
+                                             "chrome-extension://iaojbcjndjmmblmoemilknlnjijokkfg/",
+                                             "chrome-extension://abpahgnajbkclfhpodhjhlmgfjhpibaa/" };
 
 static NSDictionary *hostAt(NSString *manifest) {
     NSDictionary *host = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:manifest] ?: NSData.data options:0 error:nil];

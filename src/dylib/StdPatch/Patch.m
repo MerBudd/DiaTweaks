@@ -1,5 +1,6 @@
 #import "StdPatch/StdPatch.h"
 #import "StdPatch/Hide.h"
+#import "SafeMode/SafeMode.h"
 #include <mach-o/getsect.h>
 #include <notify.h>
 
@@ -71,6 +72,7 @@ void DPSetPatch(DPPatch *patch, BOOL on, BOOL save) {
     if (patch->on == on) return;
     patch->on = on;
     if (save) [DPDefaults setBool:on forKey:patch->key];
+    if (DPSafeMode) return;  // Nothing is installed, so the choice waits until patches are turned back on.
     if (patch->apply) patch->apply(patch);
     else DPAnimate();
     if (on && patch->ready) DPEnsureReady(patch);
@@ -85,6 +87,16 @@ NSString *DPRelayProblem(void) {
         if (![NSFileManager.defaultManager isExecutableFileAtPath:DPAppSupport(path)])
             return [NSString stringWithFormat:@"%@ is missing. Install DiaTweaks again to put it back.", DPAppSupport(path)];
     return nil;
+}
+
+// A folder Dia may not write to was usually made by something running as root, and taking it back fixes it.
+NSString *DPWriteProblem(NSString *path, NSError *error) {
+    path = error.userInfo[NSFilePathErrorKey] ?: path;
+    NSString *problem = [NSString stringWithFormat:@"Couldn’t write %@: %@", path, error.localizedDescription];
+    if (error.code != NSFileWriteNoPermissionError) return problem;
+    NSString *folder = path.stringByDeletingLastPathComponent;
+    if ([folder hasPrefix:NSHomeDirectory()]) folder = [@"$HOME" stringByAppendingString:[folder substringFromIndex:NSHomeDirectory().length]];
+    return [problem stringByAppendingFormat:@" To fix it, run sudo chown -R \"$(whoami)\" \"%@\" && chmod -R u+w \"%@\" in Terminal, then turn this on again.", folder, folder];
 }
 
 NSString *DPHostProblem(NSString *manifest, NSString *name) {
@@ -109,7 +121,7 @@ NSString *DPChoice(DPPatch *patch) {
 
 void DPSetChoice(DPPatch *patch, NSString *value) {
     [DPDefaults setObject:value forKey:patch->choice];
-    if (patch->on && patch->apply) patch->apply(patch);
+    if (!DPSafeMode && patch->on && patch->apply) patch->apply(patch);
 }
 
 static int DPCompareOrder(const void *a, const void *b) {

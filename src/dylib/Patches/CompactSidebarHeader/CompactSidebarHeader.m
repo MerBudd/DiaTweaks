@@ -4,7 +4,7 @@ extern DPPatch DPCompactSidebarHeader;
 static const CGFloat DPHeaderTrim = 10;
 static const CGFloat DPTopTabsButtonInset = 14;  // Where Dia puts the window buttons, from the window's corner, with tabs at the top.
 static NSHashTable<NSView *> *DPSidebars;
-static char DPHeaderFrameKey, DPButtonsFrameKey;
+static char DPHeaderFrameKey, DPButtonsFrameKey, DPRetriesKey;
 
 static NSRect DPLaidOutHeader(NSView *header) {
     return [DPDiaValue(header, &DPHeaderFrameKey, @(header.frame)) rectValue];
@@ -31,6 +31,13 @@ static void DPHeader_layout(NSView *self, SEL _cmd) {
     NSRect close = DPCloseButtonInWindow(lights);
     CGFloat dx = DPTopTabsButtonInset - NSMinX(close), dy = DPTopTabsButtonInset - NSMinY(close);
     BOOL fullScreen = (self.window.styleMask & NSWindowStyleMaskFullScreen) != 0;
+    // At launch Dia lays the header out before the window's buttons are in it, then not again until the sidebar changes.
+    NSUInteger retries = [DPGet(self, &DPRetriesKey) unsignedIntegerValue];
+    if (DPCompactSidebarHeader.on && NSIsEmptyRect(close) && self.window && retries < 8) {
+        DPSet(self, &DPRetriesKey, @(retries + 1));
+        __weak NSView *header = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC / 4), dispatch_get_main_queue(), ^{ header.needsLayout = YES; });
+    }
     if (DPCompactSidebarHeader.on && !fullScreen && !NSIsEmptyRect(close) && fabs(dx) <= 6 && fabs(dy) <= 6) {
         frame.origin.x += dx;
         frame.origin.y += self.isFlipped ? dy : -dy;
